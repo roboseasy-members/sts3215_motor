@@ -150,6 +150,12 @@ QPushButton#dangerBtn {
 QPushButton#dangerBtn:hover {
     background-color: #C53030;
 }
+QPushButton#quitBtn {
+    background-color: #E04848;
+}
+QPushButton#quitBtn:hover {
+    background-color: #C53030;
+}
 
 /* ── ComboBox ── */
 QComboBox {
@@ -378,6 +384,13 @@ class MainWindow(QMainWindow):
         subtitle = QLabel("STS3215 Servo Motor Test & ID Setup")
         subtitle.setObjectName("headerSubtitle")
         h.addWidget(subtitle)
+
+        h.addStretch()
+
+        quit_btn = QPushButton("Quit")
+        quit_btn.setObjectName("quitBtn")
+        quit_btn.clicked.connect(self.close)
+        h.addWidget(quit_btn)
 
         return header
 
@@ -872,6 +885,12 @@ class MainWindow(QMainWindow):
             self._update_status_display(status)
         except Exception:
             pass
+
+    def closeEvent(self, event):
+        self._poll_timer.stop()
+        if self._controller.connected:
+            self._controller.disconnect()
+        event.accept()
 
     def _read_status_once(self):
         if self._current_motor_id is None:
