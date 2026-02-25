@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=STS3215 Motor Test
-Exec=sts3215-motor-test
-Icon=sts3215-motor-test
-Categories=Utility;Development;
-Comment=STS3215 Servo Motor Test and Configuration Tool

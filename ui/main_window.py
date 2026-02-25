@@ -1,6 +1,7 @@
+import os
 import serial.tools.list_ports
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QIntValidator
+from PyQt6.QtGui import QColor, QIntValidator, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -323,7 +324,7 @@ class ScanWorker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("STS3215 Motor Test — RoboSEasy")
+        self.setWindowTitle("Motor Test & ID Setup — RoboSEasy")
         self.setMinimumSize(900, 900)
         self.setStyleSheet(STYLESHEET)
 
@@ -358,7 +359,7 @@ class MainWindow(QMainWindow):
 
         # Status bar
         status_bar = QStatusBar()
-        status_bar.showMessage("STS3215 Motor Test Tool — RoboSEasy")
+        status_bar.showMessage("Motor Test & ID Setup — RoboSEasy")
         self.setStatusBar(status_bar)
 
         self._poll_timer = QTimer()
@@ -374,8 +375,31 @@ class MainWindow(QMainWindow):
         header.setFixedHeight(48)
         h = QHBoxLayout(header)
         h.setContentsMargins(16, 0, 16, 0)
+        h.setSpacing(10)
 
-        title = QLabel("STS3215 Motor Test")
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logo.png")
+        if os.path.isfile(logo_path):
+            logo_label = QLabel()
+            logo_pixmap = QPixmap(logo_path).scaledToHeight(
+                28, Qt.TransformationMode.SmoothTransformation
+            )
+            logo_label.setPixmap(logo_pixmap)
+        else:
+            logo_label = QLabel("LOGO")
+            logo_label.setFixedSize(60, 28)
+            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            logo_label.setStyleSheet(
+                "background-color: rgba(255,255,255,0.12); border-radius: 6px; "
+                "color: rgba(255,255,255,0.7); font-size: 11px; font-weight: bold;"
+            )
+        h.addWidget(logo_label)
+
+        sep = QFrame()
+        sep.setFixedSize(1, 20)
+        sep.setStyleSheet("background-color: rgba(255,255,255,0.2);")
+        h.addWidget(sep)
+
+        title = QLabel("Motor Test & ID Setup")
         title.setObjectName("headerTitle")
         h.addWidget(title)
 
