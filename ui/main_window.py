@@ -286,7 +286,8 @@ QMessageBox {
 QMessageBox QLabel {
     color: #2D2640;
     font-size: 13px;
-    min-width: 300px;
+    padding: 0px;
+    margin: 0px;
 }
 """
 
@@ -773,6 +774,7 @@ class MainWindow(QMainWindow):
             msg.setWindowTitle("모터 미선택")
             msg.setText("모터가 선택되지 않았습니다.\n\n먼저 모터 스캔을 실행하여 모터를 선택하세요.")
             msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+
             msg.exec()
             return
 
@@ -784,14 +786,14 @@ class MainWindow(QMainWindow):
             return
 
         # 확인 다이얼로그
-        reply = QMessageBox.question(
-            self,
-            "ID 변경 확인",
-            f"모터 ID를 변경하시겠습니까?\n현재 ID: {current_id} → 새 ID: {new_id}",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setWindowTitle("ID 변경")
+        msg.setText(f"모터 ID를 변경하시겠습니까?\n현재 ID: {current_id} → 새 ID: {new_id}\nID 변경 후, 모터 재스캔이 필요합니다. \t\n\n")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+
+        if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
         try:
