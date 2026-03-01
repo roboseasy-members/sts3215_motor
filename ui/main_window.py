@@ -522,9 +522,6 @@ class MainWindow(QMainWindow):
         self._pos_input.setValue(2048)
         self._pos_input.valueChanged.connect(self._on_pos_input_changed)
         row1.addWidget(self._pos_input)
-        self._move_btn = QPushButton("▶ 이동")
-        self._move_btn.clicked.connect(self._move_motor)
-        row1.addWidget(self._move_btn)
         v.addLayout(row1)
 
         # Speed
@@ -542,21 +539,6 @@ class MainWindow(QMainWindow):
         row2.addWidget(self._speed_input)
         v.addLayout(row2)
 
-        # Acceleration
-        row3 = QHBoxLayout()
-        row3.addWidget(QLabel("가속도 (0~254):"))
-        self._accel_slider = QSlider(Qt.Orientation.Horizontal)
-        self._accel_slider.setRange(0, 254)
-        self._accel_slider.setValue(50)
-        self._accel_slider.valueChanged.connect(self._on_accel_slider_changed)
-        row3.addWidget(self._accel_slider)
-        self._accel_input = QSpinBox()
-        self._accel_input.setRange(0, 254)
-        self._accel_input.setValue(50)
-        self._accel_input.valueChanged.connect(self._on_accel_input_changed)
-        row3.addWidget(self._accel_input)
-        v.addLayout(row3)
-
         # Buttons
         btn_row = QHBoxLayout()
         self._torque_btn = QPushButton("⚡ 토크 ON")
@@ -564,10 +546,9 @@ class MainWindow(QMainWindow):
         self._torque_btn.clicked.connect(self._toggle_torque)
         btn_row.addWidget(self._torque_btn)
 
-        self._stop_btn = QPushButton("⏹ 정지")
-        self._stop_btn.setObjectName("dangerBtn")
-        self._stop_btn.clicked.connect(self._stop_motor)
-        btn_row.addWidget(self._stop_btn)
+        self._move_btn = QPushButton("▶ 이동")
+        self._move_btn.clicked.connect(self._move_motor)
+        btn_row.addWidget(self._move_btn)
         btn_row.addStretch()
         v.addLayout(btn_row)
 
@@ -622,10 +603,6 @@ class MainWindow(QMainWindow):
         self._monitor_btn = QPushButton("📊 모니터링 시작")
         self._monitor_btn.clicked.connect(self._toggle_monitoring)
         btn_row.addWidget(self._monitor_btn)
-
-        self._read_once_btn = QPushButton("📖 1회 읽기")
-        self._read_once_btn.clicked.connect(self._read_status_once)
-        btn_row.addWidget(self._read_once_btn)
         btn_row.addStretch()
         v.addLayout(btn_row)
 
@@ -652,10 +629,10 @@ class MainWindow(QMainWindow):
     def _set_controls_enabled(self, enabled: bool):
         for w in [
             self._scan_btn, self._ping_btn, self._move_btn,
-            self._stop_btn, self._torque_btn, self._monitor_btn,
-            self._read_once_btn, self._pos_slider, self._pos_input,
-            self._speed_slider, self._speed_input, self._accel_slider,
-            self._accel_input, self._motor_combo,
+            self._torque_btn, self._monitor_btn,
+            self._pos_slider, self._pos_input,
+            self._speed_slider, self._speed_input,
+            self._motor_combo,
             self._id_new_input, self._id_change_btn,
         ]:
             w.setEnabled(enabled)
@@ -838,37 +815,17 @@ class MainWindow(QMainWindow):
         self._speed_slider.setValue(val)
         self._speed_slider.blockSignals(False)
 
-    def _on_accel_slider_changed(self, val):
-        self._accel_input.blockSignals(True)
-        self._accel_input.setValue(val)
-        self._accel_input.blockSignals(False)
-
-    def _on_accel_input_changed(self, val):
-        self._accel_slider.blockSignals(True)
-        self._accel_slider.setValue(val)
-        self._accel_slider.blockSignals(False)
-
     def _move_motor(self):
         if self._current_motor_id is None:
             self._log("모터를 먼저 선택하세요.")
             return
         pos = self._pos_input.value()
         speed = self._speed_input.value()
-        accel = self._accel_input.value()
         try:
-            self._controller.move_to(self._current_motor_id, pos, speed, accel)
-            self._log(f"ID {self._current_motor_id} → 위치 {pos} (속도={speed}, 가속도={accel})")
+            self._controller.move_to(self._current_motor_id, pos, speed)
+            self._log(f"ID {self._current_motor_id} → 위치 {pos} (속도={speed})")
         except Exception as e:
             self._log(f"이동 실패: {e}")
-
-    def _stop_motor(self):
-        if self._current_motor_id is None:
-            return
-        try:
-            self._controller.stop(self._current_motor_id)
-            self._log(f"ID {self._current_motor_id} 정지")
-        except Exception as e:
-            self._log(f"정지 실패: {e}")
 
     def _toggle_torque(self):
         if self._current_motor_id is None:
@@ -918,20 +875,3 @@ class MainWindow(QMainWindow):
             self._controller.disconnect()
         event.accept()
 
-    def _read_status_once(self):
-        if self._current_motor_id is None:
-            self._log("모터를 먼저 선택하세요.")
-            return
-        try:
-            status = self._controller.read_status(self._current_motor_id)
-            self._update_status_display(status)
-            def get_val(v):
-                return v[0] if isinstance(v, tuple) else v
-            self._log(
-                f"ID {self._current_motor_id} 상태: "
-                f"위치={get_val(status.position)}, 속도={get_val(status.speed)}, "
-                f"온도={get_val(status.temperature)}°C, 전압={get_val(status.voltage)}V, "
-                f"전류={get_val(status.current)}mA, 부하={get_val(status.load)}%"
-            )
-        except Exception as e:
-            self._log(f"상태 읽기 실패: {e}")
