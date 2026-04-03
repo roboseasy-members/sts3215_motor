@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
 from ui.mode_select_dialog import MODE_SINGLE, MODE_SOARM101, ModeSelectDialog
+from ui.soarm101_window import SoArm101Window
 
 
 def main():
@@ -20,7 +21,7 @@ def main():
         window = MainWindow(mode=MODE_SINGLE)
         window.show()
     elif mode == MODE_SOARM101:
-        window = MainWindow(mode=MODE_SOARM101)
+        window = SoArm101Window()
         window.show()
     else:
         sys.exit(0)
