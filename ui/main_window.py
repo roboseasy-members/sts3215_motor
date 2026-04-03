@@ -323,9 +323,13 @@ class ScanWorker(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, mode: str = "single"):
         super().__init__()
-        self.setWindowTitle("Motor Test & ID Setup — RoboSEasy")
+        self._mode = mode
+        if mode == "soarm101":
+            self.setWindowTitle("SO-ARM 101 전체 모터 테스트 — RoboSEasy")
+        else:
+            self.setWindowTitle("단일 모터 테스트 — RoboSEasy")
         self.setMinimumSize(900, 900)
         self.setStyleSheet(STYLESHEET)
 
@@ -400,13 +404,20 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet("background-color: rgba(255,255,255,0.2);")
         h.addWidget(sep)
 
-        title = QLabel("Motor Test & ID Setup")
+        if self._mode == "soarm101":
+            title_text = "SO-ARM 101 전체 모터 테스트"
+            subtitle_text = "STS3215 — All Motors"
+        else:
+            title_text = "단일 모터 테스트"
+            subtitle_text = "STS3215 Servo Motor Test & ID Setup"
+
+        title = QLabel(title_text)
         title.setObjectName("headerTitle")
         h.addWidget(title)
 
         h.addStretch()
 
-        subtitle = QLabel("STS3215 Servo Motor Test & ID Setup")
+        subtitle = QLabel(subtitle_text)
         subtitle.setObjectName("headerSubtitle")
         h.addWidget(subtitle)
 
