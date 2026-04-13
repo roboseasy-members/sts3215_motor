@@ -1,3 +1,7 @@
-PyQt6
-st3215
-pyserial
+PyQt5>=5.15.0
+pyserial>=3.5
+PyInstaller>=5.0.0
+# lerobot는 별도로 git clone 후 pip install -e . 로 설치 필요
+# git clone https://github.com/huggingface/lerobot.git
+# cd lerobot
+# pip install -e .

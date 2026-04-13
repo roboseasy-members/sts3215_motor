@@ -1,32 +1,27 @@
+#!/usr/bin/env python3
+"""
+Feetech Motor Control GUI
+메인 진입점
+"""
 import sys
-
-from PyQt6.QtWidgets import QApplication
-
-from ui.main_window import MainWindow
-from ui.mode_select_dialog import MODE_SINGLE, MODE_SOARM101, ModeSelectDialog
-from ui.soarm101_window import SoArm101Window
+from PyQt5.QtWidgets import QApplication
+from gui import MainWindow
 
 
 def main():
+    """메인 함수"""
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    dialog = ModeSelectDialog()
-    if dialog.exec() != ModeSelectDialog.DialogCode.Accepted:
-        sys.exit(0)
-
-    mode = dialog.selected_mode
-
-    if mode == MODE_SINGLE:
-        window = MainWindow(mode=MODE_SINGLE)
-        window.show()
-    elif mode == MODE_SOARM101:
-        window = SoArm101Window()
-        window.show()
-    else:
-        sys.exit(0)
-
-    sys.exit(app.exec())
+    
+    # 어플리케이션 설정
+    app.setApplicationName("Feetech Motor Control")
+    app.setOrganizationName("RoboSeasy")
+    
+    # 메인 윈도우 생성 및 표시
+    window = MainWindow()
+    window.show()
+    
+    # 이벤트 루프 실행
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
