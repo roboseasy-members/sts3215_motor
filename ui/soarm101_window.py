@@ -5,7 +5,7 @@ CheckFeetechMotors/CheckMotor_GUI.py 를 MotorController(st3215) + new-motor-che
 import os
 import serial.tools.list_ports
 
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPixmap
 from PyQt6.QtWidgets import QGraphicsDropShadowEffect
 from PyQt6.QtWidgets import (
@@ -212,6 +212,8 @@ def _shadow(widget: QWidget) -> None:
 
 
 class SoArm101Window(QMainWindow):
+    back_to_menu = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self._controller = MotorController()
@@ -300,6 +302,11 @@ class SoArm101Window(QMainWindow):
         h.addWidget(subtitle)
 
         h.addStretch()
+
+        back_btn = QPushButton("◀ 뒤로")
+        back_btn.setObjectName("refreshBtn")
+        back_btn.clicked.connect(self.back_to_menu.emit)
+        h.addWidget(back_btn)
 
         quit_btn = QPushButton("Quit")
         quit_btn.setObjectName("quitBtn")

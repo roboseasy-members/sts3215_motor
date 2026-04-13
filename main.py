@@ -11,22 +11,37 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
 
-    dialog = ModeSelectDialog()
-    if dialog.exec() != ModeSelectDialog.DialogCode.Accepted:
-        sys.exit(0)
+    while True:
+        dialog = ModeSelectDialog()
+        if dialog.exec() != ModeSelectDialog.DialogCode.Accepted:
+            sys.exit(0)
 
-    mode = dialog.selected_mode
+        mode = dialog.selected_mode
 
-    if mode == MODE_SINGLE:
-        window = MainWindow(mode=MODE_SINGLE)
+        if mode == MODE_SINGLE:
+            window = MainWindow(mode=MODE_SINGLE)
+        elif mode == MODE_SOARM101:
+            window = SoArm101Window()
+        else:
+            sys.exit(0)
+
         window.show()
-    elif mode == MODE_SOARM101:
-        window = SoArm101Window()
-        window.show()
-    else:
-        sys.exit(0)
 
-    sys.exit(app.exec())
+        # 뒤로가기 시그널이 발생하면 윈도우를 닫고 루프를 계속
+        back_requested = False
+
+        def on_back():
+            nonlocal back_requested
+            back_requested = True
+            window.close()
+
+        window.back_to_menu.connect(on_back)
+        app.exec()
+
+        if not back_requested:
+            break
+
+    sys.exit(0)
 
 
 if __name__ == "__main__":

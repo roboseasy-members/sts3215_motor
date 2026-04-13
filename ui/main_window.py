@@ -323,6 +323,8 @@ class ScanWorker(QThread):
 
 
 class MainWindow(QMainWindow):
+    back_to_menu = pyqtSignal()
+
     def __init__(self, mode: str = "single"):
         super().__init__()
         self._mode = mode
@@ -422,6 +424,11 @@ class MainWindow(QMainWindow):
         h.addWidget(subtitle)
 
         h.addStretch()
+
+        back_btn = QPushButton("◀ 뒤로")
+        back_btn.setObjectName("refreshBtn")
+        back_btn.clicked.connect(self.back_to_menu.emit)
+        h.addWidget(back_btn)
 
         quit_btn = QPushButton("Quit")
         quit_btn.setObjectName("quitBtn")
