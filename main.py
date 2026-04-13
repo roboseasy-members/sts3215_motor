@@ -2,8 +2,14 @@ import sys
 
 from PyQt6.QtWidgets import QApplication
 
+from ui.id_setup_wizard import IdSetupWizard
 from ui.main_window import MainWindow
-from ui.mode_select_dialog import MODE_SINGLE, MODE_SOARM101, ModeSelectDialog
+from ui.mode_select_dialog import (
+    MODE_ID_SETUP,
+    MODE_SINGLE,
+    MODE_SOARM101,
+    ModeSelectDialog,
+)
 from ui.soarm101_window import SoArm101Window
 
 
@@ -18,7 +24,9 @@ def main():
 
         mode = dialog.selected_mode
 
-        if mode == MODE_SINGLE:
+        if mode == MODE_ID_SETUP:
+            window = IdSetupWizard()
+        elif mode == MODE_SINGLE:
             window = MainWindow(mode=MODE_SINGLE)
         elif mode == MODE_SOARM101:
             window = SoArm101Window()
@@ -27,7 +35,6 @@ def main():
 
         window.show()
 
-        # 뒤로가기 시그널이 발생하면 윈도우를 닫고 루프를 계속
         back_requested = False
 
         def on_back():

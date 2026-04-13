@@ -28,10 +28,32 @@ QLabel#headerSubtitle {
     color: rgba(255,255,255,0.55);
     font-size: 11px;
 }
+QLabel#sectionLabel {
+    color: #2D2640;
+    font-size: 14px;
+    font-weight: 600;
+}
 QLabel#promptLabel {
     color: #2D2640;
     font-size: 14px;
     font-weight: 600;
+}
+QPushButton#setupBtn {
+    background-color: #E8833A;
+    color: rgba(255,255,255,0.95);
+    border: none;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    padding: 18px 32px;
+    min-width: 300px;
+    min-height: 50px;
+}
+QPushButton#setupBtn:hover {
+    background-color: #F09A55;
+}
+QPushButton#setupBtn:pressed {
+    background-color: #C06A28;
 }
 QPushButton#modeBtn {
     background-color: #7C5CBF;
@@ -50,6 +72,10 @@ QPushButton#modeBtn:hover {
 QPushButton#modeBtn:pressed {
     background-color: #3B1D6B;
 }
+QFrame#divider {
+    background-color: #E8E3F0;
+    border: none;
+}
 QPushButton#quitBtn {
     background-color: #E04848;
     color: rgba(255,255,255,0.92);
@@ -64,6 +90,7 @@ QPushButton#quitBtn:hover {
 }
 """
 
+MODE_ID_SETUP = "id_setup"
 MODE_SINGLE = "single"
 MODE_SOARM101 = "soarm101"
 
@@ -72,7 +99,7 @@ class ModeSelectDialog(QDialog):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Motor Test — RoboSEasy")
-        self.setFixedSize(760, 340)
+        self.setFixedSize(760, 480)
         self.setStyleSheet(STYLESHEET)
         self.setWindowFlags(
             Qt.WindowType.Dialog | Qt.WindowType.WindowCloseButtonHint
@@ -137,9 +164,33 @@ class ModeSelectDialog(QDialog):
 
     def _build_body(self) -> QVBoxLayout:
         body = QVBoxLayout()
-        body.setSpacing(20)
-        body.setContentsMargins(40, 32, 40, 28)
+        body.setSpacing(16)
+        body.setContentsMargins(40, 24, 40, 20)
 
+        # ── Section 1: 모터 ID 셋업 ──
+        setup_label = QLabel("모터 ID를 셋업하세요")
+        setup_label.setObjectName("sectionLabel")
+        setup_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        body.addWidget(setup_label)
+
+        setup_btn = QPushButton("모터 ID 셋업")
+        setup_btn.setObjectName("setupBtn")
+        setup_btn.clicked.connect(self._select_id_setup)
+        setup_row = QHBoxLayout()
+        setup_row.addStretch()
+        setup_row.addWidget(setup_btn)
+        setup_row.addStretch()
+        body.addLayout(setup_row)
+
+        # ── Divider ──
+        divider = QFrame()
+        divider.setObjectName("divider")
+        divider.setFixedHeight(1)
+        body.addWidget(divider)
+
+        body.addSpacing(4)
+
+        # ── Section 2: 테스트 모드 선택 ──
         prompt = QLabel("테스트 모드를 선택하세요")
         prompt.setObjectName("promptLabel")
         prompt.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -171,6 +222,10 @@ class ModeSelectDialog(QDialog):
         return body
 
     # ── Slots ──
+
+    def _select_id_setup(self):
+        self.selected_mode = MODE_ID_SETUP
+        self.accept()
 
     def _select_single(self):
         self.selected_mode = MODE_SINGLE

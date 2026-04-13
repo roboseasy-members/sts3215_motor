@@ -102,3 +102,17 @@ class MotorController:
             result = self._servo.ChangeId(current_id, new_id)
             if result is not None:
                 raise RuntimeError(str(result))
+
+    def change_id_broadcast(self, new_id: int) -> None:
+        """브로드캐스트로 버스에 연결된 모터의 ID를 변경한다.
+        모터가 1대만 연결된 상태에서 사용해야 한다."""
+        BROADCAST_ID = 0xFE
+        STS_ID = 5
+        STS_LOCK = 55
+        with self._lock:
+            if not self._servo:
+                raise ConnectionError("Not connected")
+            s = self._servo
+            s.write1ByteTxOnly(BROADCAST_ID, STS_LOCK, 0)   # EPROM 잠금 해제
+            s.write1ByteTxOnly(BROADCAST_ID, STS_ID, new_id) # ID 변경
+            s.write1ByteTxOnly(BROADCAST_ID, STS_LOCK, 1)   # EPROM 잠금
