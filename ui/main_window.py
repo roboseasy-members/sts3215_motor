@@ -510,6 +510,10 @@ class MainWindow(QMainWindow):
         self._id_change_btn.clicked.connect(self._change_motor_id)
         h.addWidget(self._id_change_btn)
 
+        self._id_save_btn = QPushButton("💾 ID 저장")
+        self._id_save_btn.clicked.connect(self._change_and_save_motor_id)
+        h.addWidget(self._id_save_btn)
+
         h.addStretch()
         return group
 
@@ -791,6 +795,51 @@ class MainWindow(QMainWindow):
             self._update_id_setup_label()
             # 모터 콤보 갱신 권장
             self._log("모터 재스캔을 권장합니다.")
+        except Exception as e:
+            self._log(f"ID 변경 실패: {e}")
+
+    def _change_and_save_motor_id(self):
+        """ID 변경 후 자동으로 모터 콤보박스를 갱신하여 새 ID로 셋업"""
+        if self._current_motor_id is None:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("모터 미선택")
+            msg.setText("모터가 선택되지 않았습니다.\n\n먼저 모터 스캔을 실행하여 모터를 선택하세요.")
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+            return
+
+        current_id = self._current_motor_id
+        new_id = self._id_new_input.value()
+
+        if current_id == new_id:
+            self._log("현재 ID와 새 ID가 동일합니다.")
+            return
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setWindowTitle("ID 변경 및 저장")
+        msg.setText(f"모터 ID를 변경하고 저장하시겠습니까?\n현재 ID: {current_id} → 새 ID: {new_id}\n\n변경 후 자동으로 모터를 재셋업합니다.")
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setDefaultButton(QMessageBox.StandardButton.No)
+
+        if msg.exec() != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self._controller.change_id(current_id, new_id)
+            self._log(f"ID 변경 성공: {current_id} → {new_id}")
+
+            # 콤보박스에서 기존 ID를 새 ID로 교체
+            for i in range(self._motor_combo.count()):
+                if self._motor_combo.itemData(i) == current_id:
+                    self._motor_combo.setItemText(i, f"ID: {new_id}")
+                    self._motor_combo.setItemData(i, new_id)
+                    break
+
+            self._current_motor_id = new_id
+            self._update_id_setup_label()
+            self._log(f"모터 ID {new_id}번으로 저장 및 셋업 완료.")
         except Exception as e:
             self._log(f"ID 변경 실패: {e}")
 
