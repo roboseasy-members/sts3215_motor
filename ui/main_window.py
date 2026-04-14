@@ -731,7 +731,13 @@ class MainWindow(QMainWindow):
                     msg.setStandardButtons(QMessageBox.StandardButton.Ok)
                     msg.exec()
             except Exception as e:
-                self._log(f"연결 실패: {e}")
+                emsg = str(e)
+                self._log(f"연결 실패: {emsg}")
+                if "PermissionError" in emsg or "액세스" in emsg or "Access" in emsg:
+                    self._log(
+                        "→ 포트가 점유 중입니다. 수 초 후 재연결을 시도하거나, "
+                        "다른 시리얼 프로그램을 닫고 USB를 재연결해보세요."
+                    )
 
     def _scan_motors(self):
         if not self._controller.connected:

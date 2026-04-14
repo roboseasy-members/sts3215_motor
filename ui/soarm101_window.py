@@ -462,7 +462,15 @@ class SoArm101Window(QMainWindow):
             self._timer.start(100)
 
         except Exception as e:
-            QMessageBox.critical(self, "연결 오류", f"모터 연결 실패:\n{e}")
+            emsg = str(e)
+            hint = ""
+            if "PermissionError" in emsg or "액세스" in emsg or "Access" in emsg:
+                hint = (
+                    "\n\n포트가 이미 열려 있거나 다른 프로세스가 점유 중입니다.\n"
+                    "• 수 초 후 다시 연결 버튼을 눌러주세요 (자동 재시도 중).\n"
+                    "• 다른 시리얼 프로그램을 닫고 USB 케이블을 재연결해보세요."
+                )
+            QMessageBox.critical(self, "연결 오류", f"모터 연결 실패:\n{emsg}{hint}")
             self._status_led.setStyleSheet(f"color: {COLOR_DANGER}; font-size: 18px;")
             self.statusBar().showMessage("연결 실패")
 

@@ -25,15 +25,56 @@ class MotorController:
     def connected(self) -> bool:
         return self._connected
 
-    def connect(self, port: str) -> None:
-        with self._lock:
-            self._servo = ST3215(port)
-            self._connected = True
+    def connect(self, port: str, retries: int = 2, retry_delay: float = 0.6) -> None:
+        """시리얼 포트에 연결. PermissionError 등 일시적 실패 시 자동 재시도."""
+        import time
+        last_exc: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                with self._lock:
+                    self._servo = ST3215(port)
+                    self._connected = True
+                return
+            except Exception as e:
+                last_exc = e
+                # 이전 실패로 열린 핸들이 남아있을 가능성 — 정리 후 재시도
+                self._servo = None
+                self._connected = False
+                import gc
+                gc.collect()
+                if attempt < retries:
+                    time.sleep(retry_delay)
+        # 모든 재시도 실패
+        if last_exc is not None:
+            raise last_exc
 
     def disconnect(self) -> None:
+        """시리얼 포트를 명시적으로 닫고 모든 참조를 제거한다.
+        (Windows에서 다음 연결 시 PermissionError(13) 방지)"""
+        import gc
         with self._lock:
+            if self._servo is not None:
+                # ST3215 라이브러리는 내부적으로 portHandler(scservo_sdk PortHandler)를 가짐
+                try:
+                    ph = getattr(self._servo, "portHandler", None)
+                    if ph is not None:
+                        try:
+                            ph.closePort()
+                        except Exception:
+                            pass
+                        # pyserial 래퍼일 경우 직접 close 시도
+                        ser = getattr(ph, "ser", None)
+                        if ser is not None:
+                            try:
+                                ser.close()
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
             self._servo = None
             self._connected = False
+        # OS가 핸들을 확실히 반환하도록 GC 강제 실행
+        gc.collect()
 
     def scan_motors(self, id_range: range = range(1, 30)) -> list[int]:
         found = []

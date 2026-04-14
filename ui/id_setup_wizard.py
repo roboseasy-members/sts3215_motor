@@ -9,11 +9,13 @@ from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QProgressDialog,
     QPushButton,
     QStatusBar,
@@ -181,6 +183,48 @@ class ScanWorker(QThread):
                 pass
             self.progress.emit(int((i + 1) / total * 100))
         self.found.emit(found)
+
+
+class CenteringDialog(QDialog):
+    """커스텀 중앙 정렬 진행 다이얼로그 — QProgressDialog보다 안정적으로 리페인트"""
+
+    def __init__(self, parent, title_text: str):
+        super().__init__(parent)
+        self.setWindowTitle("중앙 정렬 진행 중")
+        self.setModal(True)
+        self.setFixedSize(440, 170)
+        # 닫기 버튼 비활성화 (중간에 닫지 못하게)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        self.label = QLabel(title_text)
+        self.label.setWordWrap(True)
+        self.label.setStyleSheet("font-size: 12px; color: #2D2640;")
+        layout.addWidget(self.label)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        self.progress.setFixedHeight(22)
+        self.progress.setStyleSheet(
+            "QProgressBar { border: 1px solid #E8E3F0; border-radius: 4px;"
+            " background-color: #F5F3F8; text-align: center; color: #2D2640;"
+            " font-weight: 600; font-size: 11px; }"
+            "QProgressBar::chunk { background-color: #7C5CBF; border-radius: 3px; }"
+        )
+        layout.addWidget(self.progress)
+
+    def update_progress(self, value: int, text: str):
+        self.progress.setValue(max(0, min(100, value)))
+        self.label.setText(text)
+        # 강제 리페인트 (타이머 콜백 중에도 UI가 즉시 갱신되도록)
+        self.progress.repaint()
+        self.label.repaint()
 
 
 class IdSetupWizard(QMainWindow):
@@ -516,7 +560,16 @@ class IdSetupWizard(QMainWindow):
                     f"{port} 연결됨 — 모터를 1대 연결하고 '모터 스캔' 버튼을 누르세요"
                 )
             except Exception as e:
-                QMessageBox.critical(self, "연결 실패", str(e))
+                msg = str(e)
+                hint = ""
+                if "PermissionError" in msg or "액세스" in msg or "Access" in msg:
+                    hint = (
+                        "\n\n포트가 이미 열려 있거나 다른 프로세스가 점유 중입니다.\n"
+                        "• 수 초 후 다시 연결 버튼을 눌러주세요 (자동 재시도 중).\n"
+                        "• 다른 시리얼 프로그램(PuTTY, Arduino IDE 등)이 있다면 종료하세요.\n"
+                        "• 그래도 안 되면 USB 케이블을 뺏다 다시 꽂아주세요."
+                    )
+                QMessageBox.critical(self, "연결 실패", f"{msg}{hint}")
 
     def _update_led(self, connected: bool):
         color = COLOR_SUCCESS if connected else COLOR_DANGER
@@ -783,8 +836,8 @@ class IdSetupWizard(QMainWindow):
             f"font-size: 13px; color: {COLOR_SUCCESS}; font-weight: 700;"
         )
 
-        # ID 변경 직후 — 토크 활성화 + 위치 2048(중앙)로 이동
-        # 이동 완료를 기다린 후(약 1.5초) 다음 스텝으로 자동 진행
+        # ID 변경 직후 — 토크 활성화 + 적응형 센터링 시작
+        # 속도를 1000으로 시작, 2048에 가까워질수록 점점 감속, 오차 ±1 이내 도달 시 다음 스텝 진행
         self._assign_btn.setEnabled(False)
         self._scan_btn.setEnabled(False)
         self.statusBar().showMessage(
@@ -792,16 +845,151 @@ class IdSetupWizard(QMainWindow):
         )
         try:
             self._controller.set_torque(target_id, True)
-            self._controller.move_to(target_id, 2048, speed=700)
         except Exception as e:
             QMessageBox.warning(
                 self,
-                "이동 실패",
-                f"ID 변경은 완료됐지만 이동 명령 실행에 실패했습니다:\n{e}",
+                "토크 활성화 실패",
+                f"ID 변경은 완료됐지만 토크 활성화에 실패했습니다:\n{e}",
             )
 
-        # 2500ms 후 스텝 완료 처리 (속도 700 기준 모터가 2048 위치에 도달할 시간 확보)
-        QTimer.singleShot(2500, lambda: self._finish_step(target_id, name))
+        self._start_adaptive_centering(target_id, name)
+
+    # ── 적응형 센터링 (2048 ±3 정밀 도달) ──
+
+    _TARGET_POS = 2048
+    _TARGET_TOLERANCE = 3           # 오차 ±3 이내면 완료 (STS3215 실제 정밀도 반영)
+    _CENTERING_TICK_MS = 80         # 폴링 주기
+    _CENTERING_MAX_TICKS = 75       # 안전장치: 75 × 80ms = 6초
+    _STALL_MAX = 15                 # 15 tick(1.2초) 동안 개선 없으면 조기 종료
+
+    def _start_adaptive_centering(self, target_id: int, name: str):
+        """ID 할당 모터를 2048 위치로 적응형 속도로 정밀 이동.
+
+        Fast-path: 이미 목표 허용오차 이내면 이동 명령 생략하고 즉시 다음 단계로.
+        """
+        # ── Fast-path: 이미 세팅된 모터면 바로 통과 ────────────────────
+        try:
+            status = self._controller.read_status(target_id)
+            pos_now = status.position
+            if isinstance(pos_now, tuple):
+                pos_now = pos_now[0] if pos_now else 0
+            pos_now = int(pos_now)
+            if abs(pos_now - self._TARGET_POS) <= self._TARGET_TOLERANCE:
+                # 이미 중앙에 있음 → 다이얼로그 없이 바로 _finish_step
+                self._centering_id = target_id
+                self._centering_name = name
+                self._centering_last_speed = 0
+                self._finish_step(target_id, name)
+                return
+        except Exception:
+            pass
+
+        # ── 일반 경로: 진행 다이얼로그 + 적응형 이동 ──────────────────
+        self._centering_id = target_id
+        self._centering_name = name
+        self._centering_tick = 0
+        self._centering_last_speed = None
+        self._centering_best_error = None       # 지금까지 관찰된 최소 오차
+        self._centering_stall_count = 0         # 개선 없이 지난 tick 수
+
+        self._centering_dialog = CenteringDialog(
+            self,
+            f"ID {target_id} ({name}) — 중앙 위치(2048)로 이동 중..."
+        )
+        self._centering_dialog.show()
+
+        self._centering_timer = QTimer(self)
+        self._centering_timer.timeout.connect(self._centering_tick_fn)
+
+        # 초기 이동 (최대 속도)
+        self._issue_centering_move(1000)
+        self._centering_timer.start(self._CENTERING_TICK_MS)
+
+    def _issue_centering_move(self, speed: int):
+        """2048로 이동 명령 재발행 (속도만 바뀜)"""
+        try:
+            self._controller.move_to(self._centering_id, self._TARGET_POS, speed=speed)
+            self._centering_last_speed = speed
+        except Exception:
+            pass
+
+    def _centering_tick_fn(self):
+        """주기적으로 현재 위치를 읽어 속도를 동적으로 조절하고 도달 여부 판정"""
+        self._centering_tick += 1
+
+        # 현재 위치 읽기
+        try:
+            status = self._controller.read_status(self._centering_id)
+            pos = status.position
+            if isinstance(pos, tuple):
+                pos = pos[0] if pos else 0
+            pos = int(pos)
+        except Exception:
+            if self._centering_tick >= self._CENTERING_MAX_TICKS:
+                self._stop_centering()
+            return
+
+        error = abs(pos - self._TARGET_POS)
+
+        # 진행률 계산 — 절대 기준 (현재 위치가 2048에 얼마나 가까운지)
+        # 2048±2048 범위를 0~100%로 매핑 (최대 이탈 2048 → 0%, 2048 도달 → 100%)
+        progress = max(0, min(100, int(100 - (error / 2048) * 100)))
+        self._centering_dialog.update_progress(
+            progress,
+            f"ID {self._centering_id} ({self._centering_name}) — 중앙 정렬\n\n"
+            f"현재 위치: {pos}  /  목표: 2048\n"
+            f"오차: {error}  |  속도: {self._centering_last_speed}"
+        )
+
+        # 완료 조건 (허용 오차 이내)
+        if error <= self._TARGET_TOLERANCE:
+            self._centering_dialog.update_progress(100, "완료!")
+            self._stop_centering()
+            return
+
+        # 조기 종료 1: 타임아웃
+        if self._centering_tick >= self._CENTERING_MAX_TICKS:
+            self._stop_centering()
+            return
+
+        # 조기 종료 2: 개선 정체 감지 (stall)
+        # 현재 오차가 지금까지 최소보다 크거나 같으면 stall 카운트 증가
+        if self._centering_best_error is None or error < self._centering_best_error:
+            self._centering_best_error = error
+            self._centering_stall_count = 0
+        else:
+            self._centering_stall_count += 1
+            if self._centering_stall_count >= self._STALL_MAX:
+                # 개선 안 됨 → 현재 위치 수용하고 진행
+                self._stop_centering()
+                return
+
+        # 오차에 따라 속도 결정 — 멀면 빠르게, 가까우면 정밀하게
+        # (Tolerance가 ±3이므로 error ≤ 3 구간은 위의 완료 분기에서 처리됨)
+        if error > 50:
+            target_speed = 1000
+        elif error > 10:
+            target_speed = 400
+        else:
+            target_speed = 150   # 최소 이동 가능 속도 (정지 마찰 극복)
+
+        # 속도가 바뀔 때만 move_to 재발행
+        if target_speed != self._centering_last_speed:
+            self._issue_centering_move(target_speed)
+
+        self.statusBar().showMessage(
+            f"ID {self._centering_id} — 위치 {pos} (오차 {error}, 속도 {target_speed})"
+        )
+
+    def _stop_centering(self):
+        """센터링 타이머 중지 + 다이얼로그 닫기 + 다음 스텝으로 진행"""
+        if hasattr(self, "_centering_timer") and self._centering_timer is not None:
+            self._centering_timer.stop()
+            self._centering_timer = None
+        if hasattr(self, "_centering_dialog") and self._centering_dialog is not None:
+            self._centering_dialog.close()
+            self._centering_dialog = None
+        self._finish_step(self._centering_id, self._centering_name)
 
     def _finish_step(self, target_id: int, name: str):
         """ID 할당 + 이동 완료 후 호출 — 다음 스텝으로 진행"""
@@ -816,7 +1004,7 @@ class IdSetupWizard(QMainWindow):
                 spd = spd[0] if spd else 0
             value_text = f"위치: {int(pos)}, 속도: {int(spd)}"
         except Exception:
-            value_text = "위치: 2048, 속도: 700"
+            value_text = "위치: 2048, 속도: --"
 
         if target_id in self._step_rows:
             self._step_rows[target_id]["value"].setText(value_text)
@@ -852,14 +1040,24 @@ class IdSetupWizard(QMainWindow):
 
     # ── Navigation ──
 
+    def _cleanup_centering(self):
+        if hasattr(self, "_centering_timer") and self._centering_timer is not None:
+            self._centering_timer.stop()
+            self._centering_timer = None
+        if hasattr(self, "_centering_dialog") and self._centering_dialog is not None:
+            self._centering_dialog.close()
+            self._centering_dialog = None
+
     def _on_back(self):
         self._stop_monitoring()
+        self._cleanup_centering()
         if self._controller.connected:
             self._controller.disconnect()
         self.back_to_menu.emit()
 
     def closeEvent(self, event):
         self._stop_monitoring()
+        self._cleanup_centering()
         if self._controller.connected:
             self._controller.disconnect()
         event.accept()

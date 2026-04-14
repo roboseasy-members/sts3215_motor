@@ -21,6 +21,7 @@ a = Analysis(
         # resource/ 안의 이미지를 번들 루트('.')로 복사
         (os.path.join(PROJECT_ROOT, 'resource', 'logo.png'), '.'),
         (os.path.join(PROJECT_ROOT, 'resource', 'icon.png'), '.'),
+        (os.path.join(PROJECT_ROOT, 'resource', 'icon.ico'), '.'),
     ],
     hiddenimports=[
         'PyQt6',
