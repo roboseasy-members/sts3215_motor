@@ -1047,18 +1047,12 @@ class IdSetupWizard(QMainWindow):
     def _finish_step(self, target_id: int, name: str):
         """ID 할당 + 이동 완료 후 호출 — 다음 스텝으로 진행"""
         self._wlog(f"=== finish_step: ID {target_id} ({name}) 완료, 다음 스텝으로 ===")
-        # 이동 완료 시점의 최종 위치/속도 값을 읽어서 스텝 리스트에 보라색으로 표시
+        # 이동 완료 시점의 최종 위치를 읽어서 스텝 리스트에 보라색으로 표시
         try:
-            status = self._controller.read_status(target_id)
-            pos = status.position
-            spd = status.speed
-            if isinstance(pos, tuple):
-                pos = pos[0] if pos else 0
-            if isinstance(spd, tuple):
-                spd = spd[0] if spd else 0
-            value_text = f"위치: {int(pos)}, 속도: {int(spd)}"
+            pos = self._controller.read_position(target_id)
+            value_text = f"위치: {int(pos)}"
         except Exception:
-            value_text = "위치: 2048, 속도: --"
+            value_text = "위치: 2048"
 
         if target_id in self._step_rows:
             self._step_rows[target_id]["value"].setText(value_text)
