@@ -5,7 +5,7 @@
 import os
 import serial.tools.list_ports
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -14,13 +14,14 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QStatusBar,
     QVBoxLayout,
     QWidget,
 )
 
-from motor_controller import MotorController
+from motor_controller import MotorController, MotorStatus
 
 # SO-ARM 101 기본 모터 구성 (ID: 이름)
 SOARM101_MOTORS = {
@@ -79,11 +80,11 @@ QPushButton:disabled { background-color: #E8E3F0; color: #A99BBF; }
 
 QPushButton#assignBtn {
     background-color: #E8833A;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 700;
-    padding: 14px 32px;
-    border-radius: 8px;
-    min-width: 260px;
+    padding: 7px 22px;
+    border-radius: 6px;
+    min-width: 220px;
 }
 QPushButton#assignBtn:hover { background-color: #F09A55; }
 QPushButton#assignBtn:pressed { background-color: #C06A28; }
@@ -130,7 +131,56 @@ QStatusBar {
     color: #A99BBF;
     font-size: 11px;
 }
+
+QFrame#statusCard {
+    background-color: #FFFFFF;
+    border: 1px solid #E8E3F0;
+    border-radius: 8px;
+}
+QLabel#statusTitle {
+    color: #A99BBF;
+    font-size: 11px;
+    font-weight: 600;
+}
+QLabel#statusValue {
+    color: #7C5CBF;
+    font-size: 14px;
+    font-weight: bold;
+}
+QLabel#statusUnit {
+    color: #A99BBF;
+    font-size: 10px;
+    margin-top: -2px;
+}
+QFrame#monitorPanel {
+    background-color: #F9F7FC;
+    border: 1px solid #E8E3F0;
+    border-radius: 8px;
+}
 """
+
+
+class ScanWorker(QThread):
+    """단일 모터 테스트(main_window.py)와 동일한 스캔 워커 — UI 블로킹 방지"""
+    found = pyqtSignal(list)
+    progress = pyqtSignal(int)
+
+    def __init__(self, controller: MotorController, id_range: range):
+        super().__init__()
+        self._controller = controller
+        self._id_range = id_range
+
+    def run(self):
+        found = []
+        total = len(self._id_range)
+        for i, motor_id in enumerate(self._id_range):
+            try:
+                if self._controller.ping(motor_id):
+                    found.append(motor_id)
+            except Exception:
+                pass
+            self.progress.emit(int((i + 1) / total * 100))
+        self.found.emit(found)
 
 
 class IdSetupWizard(QMainWindow):
@@ -139,13 +189,20 @@ class IdSetupWizard(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("모터 ID 셋업 — RoboSEasy")
-        self.setFixedSize(700, 620)
+        self.setMinimumSize(760, 760)
+        self.resize(760, 780)
         self.setStyleSheet(STYLESHEET)
 
         self._controller = MotorController()
-        self._current_step = 0  # 0-based index into SOARM101_MOTORS
-        self._motor_ids = list(SOARM101_MOTORS.keys())
+        self._current_step = 0  # 0-based index into _motor_ids
+        # 할당 순서: 6 → 5 → 4 → 3 → 2 → 1 (공장기본 ID=1 충돌 방지)
+        self._motor_ids = list(reversed(list(SOARM101_MOTORS.keys())))
         self._completed = set()
+
+        # 실시간 상태 모니터링
+        self._monitor_id: int | None = None
+        self._poll_timer = QTimer()
+        self._poll_timer.timeout.connect(self._poll_status)
 
         central = QWidget()
         central.setObjectName("centralWidget")
@@ -271,6 +328,22 @@ class IdSetupWizard(QMainWindow):
         self._instruction.setWordWrap(True)
         layout.addWidget(self._instruction)
 
+        # 1단계: 스캔 버튼 + 발견된 모터 콤보
+        scan_row = QHBoxLayout()
+        scan_row.addStretch()
+        scan_row.addWidget(QLabel("1. 모터 스캔:"))
+        self._scan_btn = QPushButton("🔍 모터 스캔")
+        self._scan_btn.setEnabled(False)
+        self._scan_btn.clicked.connect(self._do_scan)
+        scan_row.addWidget(self._scan_btn)
+
+        self._found_combo = QComboBox()
+        self._found_combo.setEnabled(False)
+        scan_row.addWidget(self._found_combo)
+        scan_row.addStretch()
+        layout.addLayout(scan_row)
+
+        # 2단계: ID 할당 버튼
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         self._assign_btn = QPushButton("연결 확인 && ID 할당")
@@ -281,7 +354,72 @@ class IdSetupWizard(QMainWindow):
         btn_row.addStretch()
         layout.addLayout(btn_row)
 
+        # 상태 모니터 패널 (스캔 완료 시 자동으로 표시/시작)
+        self._monitor_panel = self._build_monitor_panel()
+        self._monitor_panel.setVisible(False)
+        layout.addWidget(self._monitor_panel)
+
         self._update_step_ui()
+
+        return panel
+
+    def _build_monitor_panel(self) -> QFrame:
+        """단일 모터 테스트의 '상태 모니터'와 동일한 카드형 디스플레이"""
+        panel = QFrame()
+        panel.setObjectName("monitorPanel")
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(12, 10, 12, 10)
+        v.setSpacing(8)
+
+        # 제목 + 대상 모터 표시
+        header = QHBoxLayout()
+        title = QLabel("📊 상태 모니터")
+        title.setStyleSheet(
+            f"font-size: 13px; font-weight: 700; color: {COLOR_TEXT};"
+        )
+        header.addWidget(title)
+        header.addStretch()
+        self._monitor_target_label = QLabel("— 모터: —")
+        self._monitor_target_label.setStyleSheet(
+            f"font-size: 12px; color: {COLOR_ACCENT}; font-weight: 600;"
+        )
+        header.addWidget(self._monitor_target_label)
+        v.addLayout(header)
+
+        # 상태 카드 그리드 — 값과 단위를 한 줄에 합쳐서 세로 공간 절약
+        grid = QHBoxLayout()
+        grid.setSpacing(6)
+        self._status_labels: dict[str, QLabel] = {}
+        self._status_units: dict[str, str] = {
+            "위치": "",
+            "속도": "",
+            "온도": "°C",
+            "전압": "V",
+            "전류": "mA",
+            "부하": "%",
+        }
+        for name, unit in self._status_units.items():
+            frame = QFrame()
+            frame.setObjectName("statusCard")
+            frame.setMinimumWidth(95)
+            fl = QVBoxLayout(frame)
+            fl.setContentsMargins(6, 6, 6, 6)
+            fl.setSpacing(2)
+
+            header_txt = f"{name} ({unit})" if unit else name
+            t = QLabel(header_txt)
+            t.setObjectName("statusTitle")
+            t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fl.addWidget(t)
+
+            val = QLabel("--")
+            val.setObjectName("statusValue")
+            val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fl.addWidget(val)
+
+            self._status_labels[name] = val
+            grid.addWidget(frame)
+        v.addLayout(grid)
 
         return panel
 
@@ -294,7 +432,8 @@ class IdSetupWizard(QMainWindow):
         layout.setSpacing(6)
 
         self._step_rows = {}
-        for motor_id, name in SOARM101_MOTORS.items():
+        for motor_id in self._motor_ids:
+            name = SOARM101_MOTORS[motor_id]
             row = QHBoxLayout()
             row.setSpacing(10)
 
@@ -312,6 +451,12 @@ class IdSetupWizard(QMainWindow):
             text_label.setStyleSheet("font-size: 13px;")
             row.addWidget(text_label)
 
+            value_label = QLabel("")
+            value_label.setStyleSheet(
+                f"color: {COLOR_ACCENT}; font-size: 12px; font-weight: 600;"
+            )
+            row.addWidget(value_label)
+
             row.addStretch()
 
             status_label = QLabel("대기")
@@ -322,6 +467,7 @@ class IdSetupWizard(QMainWindow):
             self._step_rows[motor_id] = {
                 "icon": icon_label,
                 "text": text_label,
+                "value": value_label,
                 "status": status_label,
             }
 
@@ -346,9 +492,15 @@ class IdSetupWizard(QMainWindow):
 
     def _toggle_connection(self):
         if self._controller.connected:
+            self._stop_monitoring()
+            self._monitor_panel.setVisible(False)
+            self._monitor_id = None
             self._controller.disconnect()
             self._connect_btn.setText("연결")
+            self._scan_btn.setEnabled(False)
             self._assign_btn.setEnabled(False)
+            self._found_combo.setEnabled(False)
+            self._found_combo.clear()
             self._update_led(False)
             self.statusBar().showMessage("연결 해제됨")
         else:
@@ -359,9 +511,11 @@ class IdSetupWizard(QMainWindow):
             try:
                 self._controller.connect(port)
                 self._connect_btn.setText("연결 해제")
-                self._assign_btn.setEnabled(True)
+                self._scan_btn.setEnabled(True)
                 self._update_led(True)
-                self.statusBar().showMessage(f"{port} 연결됨")
+                self.statusBar().showMessage(
+                    f"{port} 연결됨 — 모터를 1대 연결하고 '모터 스캔' 버튼을 누르세요"
+                )
             except Exception as e:
                 QMessageBox.critical(self, "연결 실패", str(e))
 
@@ -381,8 +535,11 @@ class IdSetupWizard(QMainWindow):
                 "모든 모터의 ID가 할당되었습니다.\n"
                 "뒤로 가서 'SO-ARM 101 전체 모터 테스트'를 진행하세요."
             )
+            self._scan_btn.setEnabled(False)
             self._assign_btn.setEnabled(False)
             self._assign_btn.setText("완료")
+            self._found_combo.setEnabled(False)
+            self._found_combo.clear()
             return
 
         target_id = self._motor_ids[self._current_step]
@@ -393,12 +550,21 @@ class IdSetupWizard(QMainWindow):
         self._step_title.setText(f"Step {step_num}/{total}: ID {target_id} 할당")
         self._step_title.setStyleSheet(f"color: {COLOR_TEXT};")
         self._instruction.setText(
-            f"'{name}' 모터 1대만 버스에 연결한 후 아래 버튼을 누르세요.\n"
-            f"(이전에 할당한 모터는 연결된 상태로 두어도 됩니다)"
+            f"'{name}' 모터 1대만 버스에 연결한 후\n"
+            f"① '모터 스캔' → ② 할당 버튼 순서로 진행하세요.\n"
+            f"(이전 스텝의 모터는 분리해주세요)"
         )
-        self._assign_btn.setText(f"연결 확인 && ID {target_id} 할당")
-        if self._controller.connected:
-            self._assign_btn.setEnabled(True)
+        self._assign_btn.setText(f"✨ ID {target_id} 할당")
+        # 할당 버튼은 스캔 결과가 나와야 활성화됨
+        self._assign_btn.setEnabled(False)
+        self._found_combo.clear()
+        self._found_combo.setEnabled(False)
+        # 스캔 버튼은 연결되어 있으면 다시 활성화
+        self._scan_btn.setEnabled(self._controller.connected)
+        # 다음 스텝 진입 시 모니터 중지/숨김
+        if hasattr(self, "_monitor_panel"):
+            self._stop_monitoring()
+            self._monitor_panel.setVisible(False)
 
     def _update_step_list(self):
         for motor_id, widgets in self._step_rows.items():
@@ -431,59 +597,173 @@ class IdSetupWizard(QMainWindow):
                     f"color: {COLOR_WAITING}; font-size: 12px;"
                 )
 
-    def _do_assign(self):
+    # ── 스캔 (단일 모터 테스트 방식) ──
+
+    def _do_scan(self):
+        """단일 모터 테스트(main_window.py)와 동일한 ScanWorker 기반 스캔"""
         if not self._controller.connected:
             QMessageBox.warning(self, "오류", "먼저 포트에 연결하세요.")
             return
 
-        target_id = self._motor_ids[self._current_step]
-        name = SOARM101_MOTORS[target_id]
-
-        # 이미 할당된 ID 목록 (이전 스텝에서 할당한 모터들)
-        already_assigned = sorted(self._completed)
-
-        # 1) 버스 스캔 — 현재 연결된 모터 확인
-        self.statusBar().showMessage("모터 스캔 중...")
+        self._scan_btn.setEnabled(False)
         self._assign_btn.setEnabled(False)
+        self._found_combo.clear()
+        self._found_combo.setEnabled(False)
 
-        found = self._controller.scan_motors(range(0, 30))
+        progress = QProgressDialog("모터 스캔 중...", "취소", 0, 100, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
 
-        # 이전에 할당한 모터를 제외하고 새 모터 찾기
-        new_motors = [mid for mid in found if mid not in self._completed]
+        # SO-ARM 101은 ID 1~6만 사용하므로 1~7 범위로 한정 (29까지 스캔하던 기존 대비 ~4배 빠름)
+        self._scan_worker = ScanWorker(self._controller, range(1, 8))
+        self._scan_worker.progress.connect(progress.setValue)
 
-        if len(new_motors) == 0:
+        def on_found(ids: list[int]):
+            progress.close()
+            self._on_scan_found(ids)
+
+        self._scan_worker.found.connect(on_found)
+        self._scan_worker.start()
+
+    def _on_scan_found(self, ids: list[int]):
+        self._scan_btn.setEnabled(True)
+
+        if not ids:
+            self.statusBar().showMessage("스캔 완료: 모터를 찾을 수 없음")
+            # 모터 없음 — 모니터 숨김
+            self._stop_monitoring()
+            self._monitor_panel.setVisible(False)
             QMessageBox.warning(
                 self,
                 "모터 없음",
-                "새로운 모터를 찾을 수 없습니다.\n"
+                "모터를 찾을 수 없습니다.\n"
                 "모터가 버스에 연결되어 있고 전원이 켜져 있는지 확인하세요.",
             )
-            self._assign_btn.setEnabled(True)
-            self.statusBar().showMessage("모터를 찾을 수 없음")
             return
 
-        if len(new_motors) > 1:
-            ids_str = ", ".join(str(m) for m in new_motors)
-            QMessageBox.warning(
-                self,
-                "모터가 여러 대 감지됨",
-                f"새 모터가 {len(new_motors)}대 감지되었습니다 (ID: {ids_str}).\n"
-                f"ID가 할당되지 않은 모터를 1대만 연결한 상태에서 다시 시도하세요.",
-            )
-            self._assign_btn.setEnabled(True)
-            self.statusBar().showMessage("모터를 1대만 연결해주세요")
-            return
+        self._found_combo.clear()
+        for mid in ids:
+            self._found_combo.addItem(f"ID: {mid}", mid)
+        # 콤보 선택 변경 시 모니터 대상도 갱신
+        try:
+            self._found_combo.currentIndexChanged.disconnect()
+        except TypeError:
+            pass
+        self._found_combo.currentIndexChanged.connect(self._on_found_combo_changed)
 
-        # 새 모터 1대 발견
-        source_id = new_motors[0]
+        self._found_combo.setEnabled(True)
+        self._found_combo.setCurrentIndex(0)
+        self._assign_btn.setEnabled(True)
 
-        if source_id == target_id:
-            # 이미 원하는 ID — 변경 불필요
+        target_id = self._motor_ids[self._current_step]
+        if len(ids) == 1:
             self.statusBar().showMessage(
-                f"모터가 이미 ID {target_id}입니다. 변경 불필요!"
+                f"스캔 완료: ID {ids[0]} 발견 — ID {target_id}로 할당하세요"
             )
         else:
-            # ID 변경
+            ids_str = ", ".join(str(m) for m in ids)
+            self.statusBar().showMessage(
+                f"⚠ 모터 {len(ids)}대 감지됨 [{ids_str}] — 1대만 연결한 뒤 재스캔 권장"
+            )
+
+        # 스캔 완료 → 상태 모니터 자동 표시 및 폴링 시작
+        source_id = self._found_combo.currentData()
+        self._monitor_id = source_id
+        self._monitor_target_label.setText(f"ID {source_id}")
+        self._monitor_target_label.setStyleSheet(
+            f"font-size: 13px; color: {COLOR_ACCENT}; font-weight: 600;"
+        )
+        self._monitor_panel.setVisible(True)
+        self._start_monitoring()
+
+    def _on_found_combo_changed(self, idx: int):
+        if idx < 0:
+            return
+        mid = self._found_combo.itemData(idx)
+        if mid is None:
+            return
+        self._monitor_id = mid
+        self._monitor_target_label.setText(f"ID {mid}")
+
+    # ── 모니터링 (단일 모터 테스트 _start/_stop/_poll 과 동일 패턴) ──
+
+    def _start_monitoring(self):
+        if self._monitor_id is None:
+            return
+        self._poll_timer.start(200)
+
+    def _stop_monitoring(self):
+        self._poll_timer.stop()
+        # 상태 라벨 초기화
+        if hasattr(self, "_status_labels"):
+            for lbl in self._status_labels.values():
+                lbl.setText("--")
+
+    def _poll_status(self):
+        if self._monitor_id is None or not self._controller.connected:
+            return
+        try:
+            status = self._controller.read_status(self._monitor_id)
+            self._update_status_display(status)
+        except Exception:
+            pass
+
+    def _update_status_display(self, status: MotorStatus):
+        def safe_val(v, fmt="d"):
+            if isinstance(v, tuple):
+                v = v[0] if v else 0
+            if fmt == "d":
+                return str(int(v)) if v is not None else "--"
+            elif fmt == ".1f":
+                return f"{float(v):.1f}" if v is not None else "--"
+            return str(v) if v is not None else "--"
+
+        self._status_labels["위치"].setText(safe_val(status.position))
+        self._status_labels["속도"].setText(safe_val(status.speed))
+        self._status_labels["온도"].setText(safe_val(status.temperature))
+        self._status_labels["전압"].setText(safe_val(status.voltage, ".1f"))
+        self._status_labels["전류"].setText(safe_val(status.current))
+        self._status_labels["부하"].setText(safe_val(status.load))
+
+    def _do_assign(self):
+        """스캔된 모터의 ID를 target_id로 변경. 재스캔으로 검증."""
+        if not self._controller.connected:
+            QMessageBox.warning(self, "오류", "먼저 포트에 연결하세요.")
+            return
+
+        if self._found_combo.count() == 0:
+            QMessageBox.warning(self, "오류", "먼저 '모터 스캔'을 실행하세요.")
+            return
+
+        source_id = self._found_combo.currentData()
+        target_id = self._motor_ids[self._current_step]
+        name = SOARM101_MOTORS[target_id]
+
+        # 확인 다이얼로그
+        if source_id == target_id:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setWindowTitle("ID 확인")
+            msg.setText(
+                f"모터가 이미 ID {target_id}입니다.\n"
+                f"이 모터를 '{name}'로 확정하시겠습니까?"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if msg.exec() != QMessageBox.StandardButton.Yes:
+                return
+        else:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setWindowTitle("ID 변경")
+            msg.setText(
+                f"모터 ID를 변경하시겠습니까?\n"
+                f"현재 ID: {source_id} → 새 ID: {target_id} ({name})"
+            )
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg.setDefaultButton(QMessageBox.StandardButton.Yes)
+            if msg.exec() != QMessageBox.StandardButton.Yes:
+                return
+
             try:
                 self._controller.change_id(source_id, target_id)
                 self.statusBar().showMessage(
@@ -495,48 +775,92 @@ class IdSetupWizard(QMainWindow):
                     "ID 변경 실패",
                     f"ID 변경 중 오류가 발생했습니다:\n{e}",
                 )
-                self._assign_btn.setEnabled(True)
                 return
 
-        # 변경 확인 — ping
-        if self._controller.ping(target_id):
-            self._completed.add(target_id)
-            self._current_step += 1
-            self._update_step_ui()
-            self._update_step_list()
+        # 모니터링 대상 ID를 새 ID로 전환
+        self._monitor_id = target_id
+        self._monitor_target_label.setText(f"ID {target_id} — {name}")
+        self._monitor_target_label.setStyleSheet(
+            f"font-size: 13px; color: {COLOR_SUCCESS}; font-weight: 700;"
+        )
 
-            if self._current_step >= len(self._motor_ids):
-                self.statusBar().showMessage("모든 모터 ID 셋업 완료!")
-                QMessageBox.information(
-                    self,
-                    "완료",
-                    "모든 모터의 ID가 성공적으로 할당되었습니다!\n"
-                    "뒤로 가서 'SO-ARM 101 전체 모터 테스트'를 진행하세요.",
-                )
-            else:
-                next_id = self._motor_ids[self._current_step]
-                next_name = SOARM101_MOTORS[next_id]
-                self.statusBar().showMessage(
-                    f"ID {target_id} ({name}) 완료 — "
-                    f"다음: ID {next_id} ({next_name}) 모터를 연결하세요"
-                )
-        else:
+        # ID 변경 직후 — 토크 활성화 + 위치 2048(중앙)로 이동
+        # 이동 완료를 기다린 후(약 1.5초) 다음 스텝으로 자동 진행
+        self._assign_btn.setEnabled(False)
+        self._scan_btn.setEnabled(False)
+        self.statusBar().showMessage(
+            f"ID {target_id} ({name}) — 중앙 위치(2048)로 이동 중..."
+        )
+        try:
+            self._controller.set_torque(target_id, True)
+            self._controller.move_to(target_id, 2048, speed=700)
+        except Exception as e:
             QMessageBox.warning(
                 self,
-                "확인 실패",
-                f"ID {target_id}으로 변경했지만 핑 응답이 없습니다.\n"
-                f"모터 연결 상태를 확인하고 다시 시도하세요.",
+                "이동 실패",
+                f"ID 변경은 완료됐지만 이동 명령 실행에 실패했습니다:\n{e}",
             )
-            self._assign_btn.setEnabled(True)
+
+        # 2500ms 후 스텝 완료 처리 (속도 700 기준 모터가 2048 위치에 도달할 시간 확보)
+        QTimer.singleShot(2500, lambda: self._finish_step(target_id, name))
+
+    def _finish_step(self, target_id: int, name: str):
+        """ID 할당 + 이동 완료 후 호출 — 다음 스텝으로 진행"""
+        # 이동 완료 시점의 최종 위치/속도 값을 읽어서 스텝 리스트에 보라색으로 표시
+        try:
+            status = self._controller.read_status(target_id)
+            pos = status.position
+            spd = status.speed
+            if isinstance(pos, tuple):
+                pos = pos[0] if pos else 0
+            if isinstance(spd, tuple):
+                spd = spd[0] if spd else 0
+            value_text = f"위치: {int(pos)}, 속도: {int(spd)}"
+        except Exception:
+            value_text = "위치: 2048, 속도: 700"
+
+        if target_id in self._step_rows:
+            self._step_rows[target_id]["value"].setText(value_text)
+
+        self._completed.add(target_id)
+        self._current_step += 1
+        self._update_step_list()
+
+        if self._current_step >= len(self._motor_ids):
+            self._update_step_ui()
+            self.statusBar().showMessage("모든 모터 ID 셋업 완료!")
+            QMessageBox.information(
+                self,
+                "완료",
+                "모든 모터의 ID가 성공적으로 할당되었습니다!\n"
+                "뒤로 가서 'SO-ARM 101 전체 모터 테스트'를 진행하세요.",
+            )
+        else:
+            next_id = self._motor_ids[self._current_step]
+            next_name = SOARM101_MOTORS[next_id]
+            self._update_step_ui()
+            QMessageBox.information(
+                self,
+                f"Step {self._current_step} 완료",
+                f"ID {target_id} ({name}) 할당 + 중앙(2048) 이동 완료!\n\n"
+                f"다음 단계: ID {next_id} ({next_name})\n"
+                f"현재 모터를 분리하고 다음 모터를 연결한 뒤\n"
+                f"'모터 스캔' 버튼을 누르세요.",
+            )
+            self.statusBar().showMessage(
+                f"ID {target_id} ({name}) 완료 — 다음: ID {next_id} ({next_name})"
+            )
 
     # ── Navigation ──
 
     def _on_back(self):
+        self._stop_monitoring()
         if self._controller.connected:
             self._controller.disconnect()
         self.back_to_menu.emit()
 
     def closeEvent(self, event):
+        self._stop_monitoring()
         if self._controller.connected:
             self._controller.disconnect()
         event.accept()

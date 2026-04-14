@@ -741,7 +741,8 @@ class MainWindow(QMainWindow):
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(0)
 
-        self._scan_worker = ScanWorker(self._controller, range(1, 30))
+        # SO-ARM 101은 ID 1~6만 사용하므로 1~7 범위로 한정 (모터 ID 셋업과 동일)
+        self._scan_worker = ScanWorker(self._controller, range(1, 8))
         self._scan_worker.progress.connect(progress.setValue)
 
         def on_found(ids: list[int]):

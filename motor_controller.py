@@ -57,7 +57,7 @@ class MotorController:
             except Exception:
                 return False
 
-    def move_to(self, motor_id: int, position: int, speed: int = 1000, acceleration: int = 50) -> None:
+    def move_to(self, motor_id: int, position: int, speed: int = 700, acceleration: int = 50) -> None:
         with self._lock:
             if not self._servo:
                 raise ConnectionError("Not connected")
