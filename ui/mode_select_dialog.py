@@ -124,9 +124,8 @@ class ModeSelectDialog(QDialog):
         h.setContentsMargins(16, 0, 16, 0)
         h.setSpacing(10)
 
-        logo_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "logo.png"
-        )
+        from resources import resource_path
+        logo_path = resource_path("logo.png")
         if os.path.isfile(logo_path):
             logo_label = QLabel()
             pix = QPixmap(logo_path).scaledToHeight(

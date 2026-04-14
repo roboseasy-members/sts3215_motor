@@ -1,6 +1,9 @@
-# Build artifacts
+# Build artifacts (루트 및 appbuild 하위)
 dist/
 build/
+appbuild/*/build/
+appbuild/*/dist/
+appbuild/*/.venv/
 
 # Python
 __pycache__/
