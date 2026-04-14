@@ -60,7 +60,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='sts3215-motor-test',
+    name='Roboseasy-motorsetup',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -3,8 +3,6 @@
 모터를 한 대씩 연결하면서 순차적으로 ID를 할당하는 반자동 워크플로우
 """
 import os
-import sys
-from datetime import datetime
 
 import serial.tools.list_ports
 
@@ -245,21 +243,6 @@ class IdSetupWizard(QMainWindow):
         # 할당 순서: 6 → 5 → 4 → 3 → 2 → 1 (공장기본 ID=1 충돌 방지)
         self._motor_ids = list(reversed(list(SOARM101_MOTORS.keys())))
         self._completed = set()
-
-        # 임시 디버그 로그 (프로젝트 루트/실행파일 옆에 log.txt)
-        try:
-            if hasattr(sys, "_MEIPASS"):
-                log_dir = os.path.dirname(sys.executable)
-            else:
-                log_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
-            self._log_path = os.path.join(log_dir, "log.txt")
-            # 세션 시작 헤더 (append 모드)
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(f"\n{'='*60}\n")
-                f.write(f"[{datetime.now().isoformat(timespec='seconds')}] ID 셋업 마법사 세션 시작\n")
-                f.write(f"{'='*60}\n")
-        except Exception:
-            self._log_path = None
 
         # 실시간 상태 모니터링
         self._monitor_id: int | None = None
@@ -676,8 +659,6 @@ class IdSetupWizard(QMainWindow):
             return
 
         target_id = self._motor_ids[self._current_step] if self._current_step < len(self._motor_ids) else None
-        self._wlog(f">>> 모터 스캔 시작 (현재 스텝 target_id={target_id})")
-
         self._scan_btn.setEnabled(False)
         self._assign_btn.setEnabled(False)
         self._found_combo.clear()
@@ -699,7 +680,6 @@ class IdSetupWizard(QMainWindow):
         self._scan_worker.start()
 
     def _on_scan_found(self, ids: list[int]):
-        self._wlog(f"<<< 스캔 결과: {ids}")
         self._scan_btn.setEnabled(True)
 
         if not ids:
@@ -812,8 +792,6 @@ class IdSetupWizard(QMainWindow):
         source_id = self._found_combo.currentData()
         target_id = self._motor_ids[self._current_step]
         name = SOARM101_MOTORS[target_id]
-        self._wlog(f">>> ID 할당 버튼 클릭: source_id={source_id} → target_id={target_id} ({name})")
-
         # 확인 다이얼로그
         if source_id == target_id:
             msg = QMessageBox(self)
@@ -872,14 +850,11 @@ class IdSetupWizard(QMainWindow):
         target_id = state["target_id"]
 
         try:
-            self._wlog(f"    change_id attempt#{state['change_attempt']}: {source_id} → {target_id} 호출")
             self._controller.change_id(source_id, target_id)
-            self._wlog(f"    change_id attempt#{state['change_attempt']}: 반환 성공")
-        except Exception as e:
-            # 호출 자체 실패도 로그만 남기고 ping 검증으로 넘어감
-            # (때때로 예외 나도 실제로는 반영되는 경우도 있어 강제 검증)
-            self._wlog(f"    change_id attempt#{state['change_attempt']}: 예외 {e} (검증으로 넘어감)")
-
+        except Exception:
+            # 호출 자체 실패도 ping 검증으로 넘어감
+            # (때때로 예외 나도 실제로는 반영되는 경우가 있어 강제 검증)
+            pass
         # 300ms 후 첫 ping (EEPROM write 안정화 대기)
         QTimer.singleShot(300, self._verify_ping_tick)
 
@@ -892,14 +867,10 @@ class IdSetupWizard(QMainWindow):
 
         try:
             responds = self._controller.ping(target_id)
-        except Exception as e:
-            self._wlog(f"    ping attempt{state['change_attempt']}.{state['ping_attempt']} 예외: {e}")
+        except Exception:
             responds = False
 
         if responds:
-            self._wlog(
-                f"    ✅ ping 성공 (change#{state['change_attempt']} ping#{state['ping_attempt']}) — ID {target_id} 응답 확인"
-            )
             self._monitor_id = target_id
             self._monitor_target_label.setText(f"ID {target_id} — {name}")
             self._monitor_target_label.setStyleSheet(
@@ -908,8 +879,6 @@ class IdSetupWizard(QMainWindow):
             self._start_adaptive_centering(target_id, name)
             return
 
-        self._wlog(f"    ping attempt{state['change_attempt']}.{state['ping_attempt']} 실패")
-
         # 현재 change 시도의 ping 재시도 아직 남음 → 150ms 후 재시도
         if state["ping_attempt"] < state["max_ping_attempts"]:
             QTimer.singleShot(150, self._verify_ping_tick)
@@ -917,9 +886,6 @@ class IdSetupWizard(QMainWindow):
 
         # ping 5회 모두 실패 — change_id 자체를 재시도할지 결정
         if state["change_attempt"] < state["max_change_attempts"]:
-            self._wlog(
-                f"    ⚠ change_id attempt#{state['change_attempt']} 반영 안 됨 — 500ms 후 재시도"
-            )
             self.statusBar().showMessage(
                 f"ID {target_id} 응답 없음 — change_id 재시도 중 "
                 f"({state['change_attempt']}/{state['max_change_attempts']})"
@@ -928,9 +894,6 @@ class IdSetupWizard(QMainWindow):
             return
 
         # 3회 change_id 모두 실패 — 진짜 에러
-        self._wlog(
-            f"    ❌ change_id {state['max_change_attempts']}회 모두 실패 — 사용자에게 알림"
-        )
         QMessageBox.critical(
             self,
             "ID 변경 실패",
@@ -952,8 +915,6 @@ class IdSetupWizard(QMainWindow):
         """단일 모터 테스트와 동일한 흐름으로 2048로 이동:
         set_torque(True) → move_to(2048, 1000) → position 폴링 → 오차 ≤3 시 완료.
         """
-        self._wlog(f"=== 센터링 시작: ID {target_id} ({name}) ===")
-
         # 상태 모니터 폴링 일시 중지 (같은 모터 이중 읽기 방지)
         self._poll_timer_was_active = self._poll_timer.isActive()
         if self._poll_timer_was_active:
@@ -973,15 +934,12 @@ class IdSetupWizard(QMainWindow):
         # 토크 활성화 + 이동 명령 한 번 (단일 모터 테스트 "Move" 버튼과 동일)
         try:
             self._controller.set_torque(target_id, True)
-            self._wlog(f"    set_torque(True) 호출")
-        except Exception as e:
-            self._wlog(f"    set_torque 실패: {e}")
+        except Exception:
+            pass
         try:
             self._controller.move_to(target_id, self._TARGET_POS, speed=self._CENTERING_SPEED)
-            self._wlog(f"    move_to(pos=2048, speed={self._CENTERING_SPEED}) 호출")
-        except Exception as e:
-            self._wlog(f"    move_to 실패: {e}")
-
+        except Exception:
+            pass
         # 폴링 타이머 시작 (단일 모터 테스트의 상태 모니터링과 동일 패턴)
         self._centering_timer = QTimer(self)
         self._centering_timer.timeout.connect(self._centering_tick_fn)
@@ -994,16 +952,12 @@ class IdSetupWizard(QMainWindow):
         # 현재 위치 읽기 — 실패 시 다음 tick에 재시도
         try:
             pos = self._controller.read_position(self._centering_id)
-        except Exception as e:
-            self._wlog(f"    tick#{self._centering_tick} read_position 실패: {e}")
+        except Exception:
             if self._centering_tick >= self._CENTERING_MAX_TICKS:
-                self._wlog(f"    ⏱ 타임아웃 (통신 실패 지속)")
                 self._stop_centering()
             return
 
         error = abs(pos - self._TARGET_POS)
-        self._wlog(f"    tick#{self._centering_tick}: pos={pos}, error={error}")
-
         # 진행률 (절대 기준: 2048에 얼마나 가까운가)
         progress = max(0, min(100, int(100 - (error / 2048) * 100)))
         self._centering_dialog.update_progress(
@@ -1015,14 +969,12 @@ class IdSetupWizard(QMainWindow):
 
         # 완료 조건
         if error <= self._TARGET_TOLERANCE:
-            self._wlog(f"    ✅ 허용오차 이내 도달 (error={error} ≤ {self._TARGET_TOLERANCE})")
             self._centering_dialog.update_progress(100, "완료!")
             self._stop_centering()
             return
 
         # 타임아웃
         if self._centering_tick >= self._CENTERING_MAX_TICKS:
-            self._wlog(f"    ⏱ 타임아웃 (tick={self._centering_tick}, error={error})")
             self._stop_centering()
             return
 
@@ -1046,7 +998,6 @@ class IdSetupWizard(QMainWindow):
 
     def _finish_step(self, target_id: int, name: str):
         """ID 할당 + 이동 완료 후 호출 — 다음 스텝으로 진행"""
-        self._wlog(f"=== finish_step: ID {target_id} ({name}) 완료, 다음 스텝으로 ===")
         # 이동 완료 시점의 최종 위치를 읽어서 스텝 리스트에 보라색으로 표시
         try:
             pos = self._controller.read_position(target_id)
@@ -1087,19 +1038,6 @@ class IdSetupWizard(QMainWindow):
             )
 
     # ── Navigation ──
-
-    # ── 임시 디버그 로그 ──
-
-    def _wlog(self, msg: str):
-        """임시 log.txt에 타임스탬프와 함께 메시지 추가"""
-        if not getattr(self, "_log_path", None):
-            return
-        try:
-            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            with open(self._log_path, "a", encoding="utf-8") as f:
-                f.write(f"[{ts}] {msg}\n")
-        except Exception:
-            pass
 
     def _cleanup_centering(self):
         if hasattr(self, "_centering_timer") and self._centering_timer is not None:
