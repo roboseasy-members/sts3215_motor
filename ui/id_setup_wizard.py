@@ -3,6 +3,9 @@
 모터를 한 대씩 연결하면서 순차적으로 ID를 할당하는 반자동 워크플로우
 """
 import os
+import sys
+from datetime import datetime
+
 import serial.tools.list_ports
 
 from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
@@ -242,6 +245,21 @@ class IdSetupWizard(QMainWindow):
         # 할당 순서: 6 → 5 → 4 → 3 → 2 → 1 (공장기본 ID=1 충돌 방지)
         self._motor_ids = list(reversed(list(SOARM101_MOTORS.keys())))
         self._completed = set()
+
+        # 임시 디버그 로그 (프로젝트 루트/실행파일 옆에 log.txt)
+        try:
+            if hasattr(sys, "_MEIPASS"):
+                log_dir = os.path.dirname(sys.executable)
+            else:
+                log_dir = os.path.dirname(os.path.abspath(os.path.join(__file__, "..")))
+            self._log_path = os.path.join(log_dir, "log.txt")
+            # 세션 시작 헤더 (append 모드)
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*60}\n")
+                f.write(f"[{datetime.now().isoformat(timespec='seconds')}] ID 셋업 마법사 세션 시작\n")
+                f.write(f"{'='*60}\n")
+        except Exception:
+            self._log_path = None
 
         # 실시간 상태 모니터링
         self._monitor_id: int | None = None
@@ -657,6 +675,9 @@ class IdSetupWizard(QMainWindow):
             QMessageBox.warning(self, "오류", "먼저 포트에 연결하세요.")
             return
 
+        target_id = self._motor_ids[self._current_step] if self._current_step < len(self._motor_ids) else None
+        self._wlog(f">>> 모터 스캔 시작 (현재 스텝 target_id={target_id})")
+
         self._scan_btn.setEnabled(False)
         self._assign_btn.setEnabled(False)
         self._found_combo.clear()
@@ -678,6 +699,7 @@ class IdSetupWizard(QMainWindow):
         self._scan_worker.start()
 
     def _on_scan_found(self, ids: list[int]):
+        self._wlog(f"<<< 스캔 결과: {ids}")
         self._scan_btn.setEnabled(True)
 
         if not ids:
@@ -790,6 +812,7 @@ class IdSetupWizard(QMainWindow):
         source_id = self._found_combo.currentData()
         target_id = self._motor_ids[self._current_step]
         name = SOARM101_MOTORS[target_id]
+        self._wlog(f">>> ID 할당 버튼 클릭: source_id={source_id} → target_id={target_id} ({name})")
 
         # 확인 다이얼로그
         if source_id == target_id:
@@ -816,169 +839,195 @@ class IdSetupWizard(QMainWindow):
             if msg.exec() != QMessageBox.StandardButton.Yes:
                 return
 
-            try:
-                self._controller.change_id(source_id, target_id)
-                self.statusBar().showMessage(
-                    f"ID {source_id} → {target_id} 변경 완료!"
-                )
-            except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "ID 변경 실패",
-                    f"ID 변경 중 오류가 발생했습니다:\n{e}",
-                )
-                return
-
-        # 모니터링 대상 ID를 새 ID로 전환
-        self._monitor_id = target_id
-        self._monitor_target_label.setText(f"ID {target_id} — {name}")
-        self._monitor_target_label.setStyleSheet(
-            f"font-size: 13px; color: {COLOR_SUCCESS}; font-weight: 700;"
-        )
-
-        # ID 변경 직후 — 토크 활성화 + 적응형 센터링 시작
-        # 속도를 1000으로 시작, 2048에 가까워질수록 점점 감속, 오차 ±1 이내 도달 시 다음 스텝 진행
-        self._assign_btn.setEnabled(False)
-        self._scan_btn.setEnabled(False)
-        self.statusBar().showMessage(
-            f"ID {target_id} ({name}) — 중앙 위치(2048)로 이동 중..."
-        )
-        try:
-            self._controller.set_torque(target_id, True)
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "토크 활성화 실패",
-                f"ID 변경은 완료됐지만 토크 활성화에 실패했습니다:\n{e}",
-            )
-
-        self._start_adaptive_centering(target_id, name)
-
-    # ── 적응형 센터링 (2048 ±3 정밀 도달) ──
-
-    _TARGET_POS = 2048
-    _TARGET_TOLERANCE = 3           # 오차 ±3 이내면 완료 (STS3215 실제 정밀도 반영)
-    _CENTERING_TICK_MS = 80         # 폴링 주기
-    _CENTERING_MAX_TICKS = 75       # 안전장치: 75 × 80ms = 6초
-    _STALL_MAX = 15                 # 15 tick(1.2초) 동안 개선 없으면 조기 종료
-
-    def _start_adaptive_centering(self, target_id: int, name: str):
-        """ID 할당 모터를 2048 위치로 적응형 속도로 정밀 이동.
-
-        Fast-path: 이미 목표 허용오차 이내면 이동 명령 생략하고 즉시 다음 단계로.
-        """
-        # ── Fast-path: 이미 세팅된 모터면 바로 통과 ────────────────────
-        try:
-            status = self._controller.read_status(target_id)
-            pos_now = status.position
-            if isinstance(pos_now, tuple):
-                pos_now = pos_now[0] if pos_now else 0
-            pos_now = int(pos_now)
-            if abs(pos_now - self._TARGET_POS) <= self._TARGET_TOLERANCE:
-                # 이미 중앙에 있음 → 다이얼로그 없이 바로 _finish_step
-                self._centering_id = target_id
-                self._centering_name = name
-                self._centering_last_speed = 0
-                self._finish_step(target_id, name)
-                return
-        except Exception:
+            # 실제 change_id 호출은 아래 retry 루프로 위임
             pass
 
-        # ── 일반 경로: 진행 다이얼로그 + 적응형 이동 ──────────────────
+        # ── change_id + verify 재시도 루프 ──
+        # 일부 모터는 첫 change_id가 EEPROM에 반영되지 않음.
+        # 사용자가 "에러 확인 → OK → 다시 ID 할당" 하던 동작을 자동화:
+        #   change_id 실패 시 500ms 대기 후 change_id 재시도 (최대 3회)
+        #   각 change_id 시도 후엔 ping 5회 재시도로 반영 확인 (첫 성공 시 즉시 진행)
+        self._assign_btn.setEnabled(False)
+        self._scan_btn.setEnabled(False)
+        self._assign_state = {
+            "source_id": source_id,
+            "target_id": target_id,
+            "name": name,
+            "change_attempt": 0,
+            "ping_attempt": 0,
+            "max_change_attempts": 3,
+            "max_ping_attempts": 5,
+        }
+        self.statusBar().showMessage(
+            f"ID {source_id} → {target_id} 변경 시도 중..."
+        )
+        self._call_change_id()
+
+    def _call_change_id(self):
+        """change_id 호출 후 verify ping 루프 시작"""
+        state = self._assign_state
+        state["change_attempt"] += 1
+        state["ping_attempt"] = 0
+        source_id = state["source_id"]
+        target_id = state["target_id"]
+
+        try:
+            self._wlog(f"    change_id attempt#{state['change_attempt']}: {source_id} → {target_id} 호출")
+            self._controller.change_id(source_id, target_id)
+            self._wlog(f"    change_id attempt#{state['change_attempt']}: 반환 성공")
+        except Exception as e:
+            # 호출 자체 실패도 로그만 남기고 ping 검증으로 넘어감
+            # (때때로 예외 나도 실제로는 반영되는 경우도 있어 강제 검증)
+            self._wlog(f"    change_id attempt#{state['change_attempt']}: 예외 {e} (검증으로 넘어감)")
+
+        # 300ms 후 첫 ping (EEPROM write 안정화 대기)
+        QTimer.singleShot(300, self._verify_ping_tick)
+
+    def _verify_ping_tick(self):
+        """ping으로 새 ID 응답 확인. 성공하면 즉시 센터링, 실패 5회 누적되면 change_id 재시도."""
+        state = self._assign_state
+        state["ping_attempt"] += 1
+        target_id = state["target_id"]
+        name = state["name"]
+
+        try:
+            responds = self._controller.ping(target_id)
+        except Exception as e:
+            self._wlog(f"    ping attempt{state['change_attempt']}.{state['ping_attempt']} 예외: {e}")
+            responds = False
+
+        if responds:
+            self._wlog(
+                f"    ✅ ping 성공 (change#{state['change_attempt']} ping#{state['ping_attempt']}) — ID {target_id} 응답 확인"
+            )
+            self._monitor_id = target_id
+            self._monitor_target_label.setText(f"ID {target_id} — {name}")
+            self._monitor_target_label.setStyleSheet(
+                f"font-size: 13px; color: {COLOR_SUCCESS}; font-weight: 700;"
+            )
+            self._start_adaptive_centering(target_id, name)
+            return
+
+        self._wlog(f"    ping attempt{state['change_attempt']}.{state['ping_attempt']} 실패")
+
+        # 현재 change 시도의 ping 재시도 아직 남음 → 150ms 후 재시도
+        if state["ping_attempt"] < state["max_ping_attempts"]:
+            QTimer.singleShot(150, self._verify_ping_tick)
+            return
+
+        # ping 5회 모두 실패 — change_id 자체를 재시도할지 결정
+        if state["change_attempt"] < state["max_change_attempts"]:
+            self._wlog(
+                f"    ⚠ change_id attempt#{state['change_attempt']} 반영 안 됨 — 500ms 후 재시도"
+            )
+            self.statusBar().showMessage(
+                f"ID {target_id} 응답 없음 — change_id 재시도 중 "
+                f"({state['change_attempt']}/{state['max_change_attempts']})"
+            )
+            QTimer.singleShot(500, self._call_change_id)
+            return
+
+        # 3회 change_id 모두 실패 — 진짜 에러
+        self._wlog(
+            f"    ❌ change_id {state['max_change_attempts']}회 모두 실패 — 사용자에게 알림"
+        )
+        QMessageBox.critical(
+            self,
+            "ID 변경 실패",
+            f"ID {target_id}로 변경을 {state['max_change_attempts']}회 시도했지만 반영되지 않았습니다.\n"
+            f"모터 전원과 버스 연결을 확인한 뒤 다시 시도하세요.",
+        )
+        self._assign_btn.setEnabled(True)
+        self._scan_btn.setEnabled(self._controller.connected)
+
+    # ── 심플 센터링 (단일 모터 테스트의 move_to + 모니터링 방식 그대로) ──
+
+    _TARGET_POS = 2048
+    _TARGET_TOLERANCE = 3           # 오차 ±3 이내면 완료
+    _CENTERING_SPEED = 1000         # move_to 속도 (단일 모터 테스트 기본값)
+    _CENTERING_TICK_MS = 100        # 폴링 주기 (단일 모터 테스트 모니터링과 동일)
+    _CENTERING_MAX_TICKS = 60       # 안전장치: 60 × 100ms = 6초
+
+    def _start_adaptive_centering(self, target_id: int, name: str):
+        """단일 모터 테스트와 동일한 흐름으로 2048로 이동:
+        set_torque(True) → move_to(2048, 1000) → position 폴링 → 오차 ≤3 시 완료.
+        """
+        self._wlog(f"=== 센터링 시작: ID {target_id} ({name}) ===")
+
+        # 상태 모니터 폴링 일시 중지 (같은 모터 이중 읽기 방지)
+        self._poll_timer_was_active = self._poll_timer.isActive()
+        if self._poll_timer_was_active:
+            self._poll_timer.stop()
+
         self._centering_id = target_id
         self._centering_name = name
         self._centering_tick = 0
-        self._centering_last_speed = None
-        self._centering_best_error = None       # 지금까지 관찰된 최소 오차
-        self._centering_stall_count = 0         # 개선 없이 지난 tick 수
 
+        # 다이얼로그 생성·표시 (초기 진행률 0%)
         self._centering_dialog = CenteringDialog(
             self,
             f"ID {target_id} ({name}) — 중앙 위치(2048)로 이동 중..."
         )
         self._centering_dialog.show()
 
+        # 토크 활성화 + 이동 명령 한 번 (단일 모터 테스트 "Move" 버튼과 동일)
+        try:
+            self._controller.set_torque(target_id, True)
+            self._wlog(f"    set_torque(True) 호출")
+        except Exception as e:
+            self._wlog(f"    set_torque 실패: {e}")
+        try:
+            self._controller.move_to(target_id, self._TARGET_POS, speed=self._CENTERING_SPEED)
+            self._wlog(f"    move_to(pos=2048, speed={self._CENTERING_SPEED}) 호출")
+        except Exception as e:
+            self._wlog(f"    move_to 실패: {e}")
+
+        # 폴링 타이머 시작 (단일 모터 테스트의 상태 모니터링과 동일 패턴)
         self._centering_timer = QTimer(self)
         self._centering_timer.timeout.connect(self._centering_tick_fn)
-
-        # 초기 이동 (최대 속도)
-        self._issue_centering_move(1000)
         self._centering_timer.start(self._CENTERING_TICK_MS)
 
-    def _issue_centering_move(self, speed: int):
-        """2048로 이동 명령 재발행 (속도만 바뀜)"""
-        try:
-            self._controller.move_to(self._centering_id, self._TARGET_POS, speed=speed)
-            self._centering_last_speed = speed
-        except Exception:
-            pass
-
     def _centering_tick_fn(self):
-        """주기적으로 현재 위치를 읽어 속도를 동적으로 조절하고 도달 여부 판정"""
+        """주기적으로 현재 위치를 읽어 도달 여부 판정 (단일 모터 테스트 _poll_status와 동일 패턴)"""
         self._centering_tick += 1
 
-        # 현재 위치 읽기
+        # 현재 위치 읽기 — 실패 시 다음 tick에 재시도
         try:
-            status = self._controller.read_status(self._centering_id)
-            pos = status.position
-            if isinstance(pos, tuple):
-                pos = pos[0] if pos else 0
-            pos = int(pos)
-        except Exception:
+            pos = self._controller.read_position(self._centering_id)
+        except Exception as e:
+            self._wlog(f"    tick#{self._centering_tick} read_position 실패: {e}")
             if self._centering_tick >= self._CENTERING_MAX_TICKS:
+                self._wlog(f"    ⏱ 타임아웃 (통신 실패 지속)")
                 self._stop_centering()
             return
 
         error = abs(pos - self._TARGET_POS)
+        self._wlog(f"    tick#{self._centering_tick}: pos={pos}, error={error}")
 
-        # 진행률 계산 — 절대 기준 (현재 위치가 2048에 얼마나 가까운지)
-        # 2048±2048 범위를 0~100%로 매핑 (최대 이탈 2048 → 0%, 2048 도달 → 100%)
+        # 진행률 (절대 기준: 2048에 얼마나 가까운가)
         progress = max(0, min(100, int(100 - (error / 2048) * 100)))
         self._centering_dialog.update_progress(
             progress,
             f"ID {self._centering_id} ({self._centering_name}) — 중앙 정렬\n\n"
             f"현재 위치: {pos}  /  목표: 2048\n"
-            f"오차: {error}  |  속도: {self._centering_last_speed}"
+            f"오차: {error}"
         )
 
-        # 완료 조건 (허용 오차 이내)
+        # 완료 조건
         if error <= self._TARGET_TOLERANCE:
+            self._wlog(f"    ✅ 허용오차 이내 도달 (error={error} ≤ {self._TARGET_TOLERANCE})")
             self._centering_dialog.update_progress(100, "완료!")
             self._stop_centering()
             return
 
-        # 조기 종료 1: 타임아웃
+        # 타임아웃
         if self._centering_tick >= self._CENTERING_MAX_TICKS:
+            self._wlog(f"    ⏱ 타임아웃 (tick={self._centering_tick}, error={error})")
             self._stop_centering()
             return
 
-        # 조기 종료 2: 개선 정체 감지 (stall)
-        # 현재 오차가 지금까지 최소보다 크거나 같으면 stall 카운트 증가
-        if self._centering_best_error is None or error < self._centering_best_error:
-            self._centering_best_error = error
-            self._centering_stall_count = 0
-        else:
-            self._centering_stall_count += 1
-            if self._centering_stall_count >= self._STALL_MAX:
-                # 개선 안 됨 → 현재 위치 수용하고 진행
-                self._stop_centering()
-                return
-
-        # 오차에 따라 속도 결정 — 멀면 빠르게, 가까우면 정밀하게
-        # (Tolerance가 ±3이므로 error ≤ 3 구간은 위의 완료 분기에서 처리됨)
-        if error > 50:
-            target_speed = 1000
-        elif error > 10:
-            target_speed = 400
-        else:
-            target_speed = 150   # 최소 이동 가능 속도 (정지 마찰 극복)
-
-        # 속도가 바뀔 때만 move_to 재발행
-        if target_speed != self._centering_last_speed:
-            self._issue_centering_move(target_speed)
-
         self.statusBar().showMessage(
-            f"ID {self._centering_id} — 위치 {pos} (오차 {error}, 속도 {target_speed})"
+            f"ID {self._centering_id} — 위치 {pos} (오차 {error})"
         )
 
     def _stop_centering(self):
@@ -989,10 +1038,15 @@ class IdSetupWizard(QMainWindow):
         if hasattr(self, "_centering_dialog") and self._centering_dialog is not None:
             self._centering_dialog.close()
             self._centering_dialog = None
+        # 센터링 시작 시 중지했던 상태 모니터 폴링 재개
+        if getattr(self, "_poll_timer_was_active", False):
+            self._poll_timer.start(200)
+            self._poll_timer_was_active = False
         self._finish_step(self._centering_id, self._centering_name)
 
     def _finish_step(self, target_id: int, name: str):
         """ID 할당 + 이동 완료 후 호출 — 다음 스텝으로 진행"""
+        self._wlog(f"=== finish_step: ID {target_id} ({name}) 완료, 다음 스텝으로 ===")
         # 이동 완료 시점의 최종 위치/속도 값을 읽어서 스텝 리스트에 보라색으로 표시
         try:
             status = self._controller.read_status(target_id)
@@ -1040,6 +1094,19 @@ class IdSetupWizard(QMainWindow):
 
     # ── Navigation ──
 
+    # ── 임시 디버그 로그 ──
+
+    def _wlog(self, msg: str):
+        """임시 log.txt에 타임스탬프와 함께 메시지 추가"""
+        if not getattr(self, "_log_path", None):
+            return
+        try:
+            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{ts}] {msg}\n")
+        except Exception:
+            pass
+
     def _cleanup_centering(self):
         if hasattr(self, "_centering_timer") and self._centering_timer is not None:
             self._centering_timer.stop()
@@ -1047,6 +1114,12 @@ class IdSetupWizard(QMainWindow):
         if hasattr(self, "_centering_dialog") and self._centering_dialog is not None:
             self._centering_dialog.close()
             self._centering_dialog = None
+        if getattr(self, "_poll_timer_was_active", False):
+            try:
+                self._poll_timer.start(200)
+            except Exception:
+                pass
+            self._poll_timer_was_active = False
 
     def _on_back(self):
         self._stop_monitoring()

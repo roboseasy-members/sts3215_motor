@@ -106,6 +106,21 @@ class MotorController:
             self._servo.SetAcceleration(motor_id, acceleration)
             self._servo.MoveTo(motor_id, position)
 
+    def read_position(self, motor_id: int) -> int:
+        """위치만 빠르게 읽기 (시리얼 1회). read_status는 7회 읽기로 느림.
+
+        실패 시 ConnectionError/RuntimeError 예외 발생 (0 반환 안 함).
+        """
+        with self._lock:
+            if not self._servo:
+                raise ConnectionError("Not connected")
+            pos = self._servo.ReadPosition(motor_id)
+            if isinstance(pos, tuple):
+                pos = pos[0] if pos else None
+            if pos is None:
+                raise RuntimeError(f"ReadPosition(ID={motor_id}) 응답 없음")
+            return int(pos)
+
     def read_status(self, motor_id: int) -> MotorStatus:
         with self._lock:
             if not self._servo:
