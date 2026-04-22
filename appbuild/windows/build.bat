@@ -8,7 +8,7 @@ chcp 65001 >nul
 
 set SCRIPT_DIR=%~dp0
 set PROJECT_ROOT=%SCRIPT_DIR%..\..
-set APP_NAME=Roboseasy-motorsetup
+set APP_NAME=Roboseasy
 
 echo =========================================
 echo  Building STS3215 Motor Test (Windows)

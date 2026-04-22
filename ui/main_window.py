@@ -357,8 +357,8 @@ class MainWindow(QMainWindow):
         body.addWidget(self._build_connection_panel())
         body.addWidget(self._build_motor_select_panel())
         body.addWidget(self._build_id_setup_panel())
-        body.addWidget(self._build_control_panel())
         body.addWidget(self._build_status_panel())
+        body.addWidget(self._build_control_panel())
         body.addWidget(self._build_log_panel())
 
         layout.addLayout(body)

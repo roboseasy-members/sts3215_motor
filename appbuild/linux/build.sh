@@ -11,8 +11,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-APP_NAME="sts3215-motor-test"
-APP_DISPLAY_NAME="STS3215 Motor Test"
+APP_NAME="Roboseasy"
+APP_DISPLAY_NAME="Roboseasy Motor Setup"
 DIST_DIR="${SCRIPT_DIR}/dist"
 BUILD_DIR="${SCRIPT_DIR}/build"
 RESOURCE_DIR="${PROJECT_ROOT}/resource"
@@ -85,14 +85,17 @@ Exec=${APP_NAME}
 Icon=${APP_NAME}
 Categories=Utility;Development;
 Comment=STS3215 Servo Motor Test and Configuration Tool
+Terminal=false
+StartupWMClass=${APP_NAME}
+StartupNotify=true
 DESKTOP
 
-    cat > "${APPDIR}/AppRun" <<'APPRUN'
+    cat > "${APPDIR}/AppRun" <<APPRUN
 #!/bin/bash
-SELF=$(readlink -f "$0")
-HERE=${SELF%/*}
-export PATH="${HERE}/usr/bin:${PATH}"
-exec "${HERE}/usr/bin/sts3215-motor-test" "$@"
+SELF=\$(readlink -f "\$0")
+HERE=\${SELF%/*}
+export PATH="\${HERE}/usr/bin:\${PATH}"
+exec "\${HERE}/usr/bin/${APP_NAME}" "\$@"
 APPRUN
     chmod +x "${APPDIR}/AppRun"
 
@@ -105,7 +108,7 @@ APPRUN
         chmod +x "${APPIMAGETOOL}"
     fi
 
-    APPIMAGE_OUT="${DIST_DIR}/${APP_NAME}-$(uname -m).AppImage"
+    APPIMAGE_OUT="${DIST_DIR}/${APP_NAME}.AppImage"
     ARCH=$(uname -m) "${APPIMAGETOOL}" "${APPDIR}" "${APPIMAGE_OUT}"
 
     echo "    AppImage 생성: ${APPIMAGE_OUT}"
@@ -120,7 +123,7 @@ echo ""
 echo "결과물:"
 echo "  실행파일: ${EXECUTABLE}"
 if [ "${1:-}" = "--appimage" ]; then
-    echo "  AppImage: ${DIST_DIR}/${APP_NAME}-$(uname -m).AppImage"
+    echo "  AppImage: ${DIST_DIR}/${APP_NAME}.AppImage"
 fi
 echo ""
 echo "실행: ${EXECUTABLE}"

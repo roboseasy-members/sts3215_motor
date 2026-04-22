@@ -35,6 +35,10 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    # GNOME Shell 등이 창을 .desktop 파일에 매칭해 올바른 아이콘을 표시하도록 지정.
+    # AppImage 내부 .desktop 의 StartupWMClass 및 파일명(Roboseasy.desktop) 과 일치해야 함.
+    app.setApplicationName("Roboseasy")
+    app.setDesktopFileName("Roboseasy")
 
     # 작업표시줄/타이틀바 아이콘 설정 — 가능한 경우 .ico 우선 (Windows 표시 품질 우수), 아니면 .png
     icon_ico = resource_path("icon.ico")

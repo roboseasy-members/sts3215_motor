@@ -60,7 +60,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='Roboseasy-motorsetup',
+    name='Roboseasy',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
