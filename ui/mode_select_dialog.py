@@ -88,11 +88,25 @@ QPushButton#quitBtn {
 QPushButton#quitBtn:hover {
     background-color: #C53030;
 }
+QPushButton#logoutBtn {
+    background-color: transparent;
+    color: #6B5B8A;
+    border: 1px solid #C9BFD9;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 16px;
+}
+QPushButton#logoutBtn:hover {
+    background-color: #EDE7F3;
+    color: #3B1D6B;
+}
 """
 
 MODE_ID_SETUP = "id_setup"
 MODE_SINGLE = "single"
 MODE_SOARM101 = "soarm101"
+MODE_LOGOUT = "logout"
 
 
 class ModeSelectDialog(QDialog):
@@ -212,6 +226,10 @@ class ModeSelectDialog(QDialog):
 
         quit_row = QHBoxLayout()
         quit_row.addStretch()
+        logout_btn = QPushButton("로그아웃")
+        logout_btn.setObjectName("logoutBtn")
+        logout_btn.clicked.connect(self._select_logout)
+        quit_row.addWidget(logout_btn)
         quit_btn = QPushButton("종료")
         quit_btn.setObjectName("quitBtn")
         quit_btn.clicked.connect(self.reject)
@@ -232,4 +250,8 @@ class ModeSelectDialog(QDialog):
 
     def _select_soarm101(self):
         self.selected_mode = MODE_SOARM101
+        self.accept()
+
+    def _select_logout(self):
+        self.selected_mode = MODE_LOGOUT
         self.accept()

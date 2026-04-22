@@ -40,10 +40,17 @@ fi
 source "${VENV_DIR}/bin/activate"
 
 if command -v uv &>/dev/null; then
-    UV_HTTP_TIMEOUT=300 uv pip install pyinstaller pyqt6 pyserial st3215 --quiet
+    UV_HTTP_TIMEOUT=300 uv pip install pyinstaller pyqt6 pyserial st3215 google-auth google-auth-oauthlib requests --quiet
 else
     python3 -m pip install --upgrade pip --quiet
-    python3 -m pip install pyinstaller pyqt6 pyserial st3215 --quiet
+    python3 -m pip install pyinstaller pyqt6 pyserial st3215 google-auth google-auth-oauthlib requests --quiet
+fi
+
+# OAuth 클라이언트 설정 파일 확인 — 빌드에 반드시 포함되어야 함
+if [ ! -f "${RESOURCE_DIR}/oauth_client.json" ]; then
+    echo "ERROR: ${RESOURCE_DIR}/oauth_client.json 가 없습니다."
+    echo "       GCP Console 에서 발급받은 Desktop OAuth 클라이언트 JSON 을 배치하세요."
+    exit 1
 fi
 
 # ---- 2. PyInstaller 실행 --------------------------------------------------

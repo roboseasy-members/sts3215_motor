@@ -21,6 +21,10 @@ a = Analysis(
         # resource/ 안의 이미지를 번들 루트('.')로 복사
         (os.path.join(PROJECT_ROOT, 'resource', 'logo.png'), '.'),
         (os.path.join(PROJECT_ROOT, 'resource', 'icon.png'), '.'),
+        # Google OAuth 2.0 Desktop 클라이언트 설정 (gitignore 대상 — 빌드 시 각자 배치)
+        (os.path.join(PROJECT_ROOT, 'resource', 'oauth_client.json'), '.'),
+        # Supabase 프로젝트 URL + publishable/anon key (gitignore 대상 — 빌드 시 각자 배치)
+        (os.path.join(PROJECT_ROOT, 'resource', 'supabase_config.json'), '.'),
     ],
     hiddenimports=[
         'PyQt6',
@@ -32,6 +36,10 @@ a = Analysis(
         'serial.tools',
         'serial.tools.list_ports',
         'st3215',
+        'google.auth.transport.requests',
+        'google.oauth2.credentials',
+        'google_auth_oauthlib.flow',
+        'requests',
     ],
     hookspath=[],
     hooksconfig={},

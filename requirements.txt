@@ -1,3 +1,6 @@
 PyQt6
 st3215
 pyserial
+google-auth
+google-auth-oauthlib
+requests

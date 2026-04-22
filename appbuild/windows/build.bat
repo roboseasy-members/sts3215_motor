@@ -30,7 +30,14 @@ if not exist "%SCRIPT_DIR%.venv" (
 call "%SCRIPT_DIR%.venv\Scripts\activate.bat"
 
 python -m pip install --upgrade pip --quiet
-python -m pip install pyinstaller pyqt6 pyserial st3215 --quiet
+python -m pip install pyinstaller pyqt6 pyserial st3215 google-auth google-auth-oauthlib requests --quiet
+
+REM OAuth 클라이언트 설정 파일 확인 - 빌드에 반드시 포함되어야 함
+if not exist "%PROJECT_ROOT%\resource\oauth_client.json" (
+    echo ERROR: %PROJECT_ROOT%\resource\oauth_client.json not found.
+    echo        Place the Desktop OAuth client JSON from GCP Console there.
+    exit /b 1
+)
 
 REM ---- 3. Run PyInstaller ------------------------------------------
 echo [2/3] Running PyInstaller...

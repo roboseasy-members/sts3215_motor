@@ -28,3 +28,15 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# OAuth 클라이언트 시크릿 (GCP Desktop OAuth 클라이언트)
+# 데스크탑 OAuth 시크릿은 Google 정책상 공개 가능하지만, 공개 배포 전엔 커밋 금지.
+# 각자 resource/oauth_client.json 를 직접 배치해야 함.
+resource/oauth_client.json
+
+# 로컬 인증 토큰(혹시 프로젝트 루트에 떨어질 경우 대비)
+auth.json
+
+# Supabase 프로젝트 설정(URL + publishable/anon key) — anon 키는 RLS 로 보호되지만
+# 퍼블릭 리포에 넣을 이유는 없음. 각자 배치.
+resource/supabase_config.json

@@ -93,4 +93,53 @@
 
 ---
 
+## 2026-04-22 — 구글 OAuth 로그인 게이트 도입 + Supabase MCP 연결
+
+**무엇을**:
+- `auth/google_oauth.py` 신규 — Google OAuth 2.0 Desktop flow(`InstalledAppFlow.run_local_server` loopback) 래퍼. 토큰을 플랫폼별 사용자 설정 디렉토리의 `Roboseasy/auth.json` 에 저장, 만료 시 refresh, revoke 감지 시 자동 삭제.
+- `ui/welcome_dialog.py` 신규 — 웰컴 화면에서 `QThread` 로 로그인 실행(블로킹 호출이라 UI 스레드에서 돌리면 안 됨).
+- `main.py` 에 외부 루프 추가 — 자동 로그인 → 실패 시 `WelcomeDialog` → 모드 선택 루프. `MODE_LOGOUT` 시 `sign_out()` 후 외부 루프가 웰컴 화면을 재표시.
+- `ui/mode_select_dialog.py` 에 `MODE_LOGOUT` 상수 추가.
+- `requirements.txt` 에 `google-auth`, `google-auth-oauthlib`, `requests` 추가.
+- 프로젝트 scope `.mcp.json` 에 Supabase MCP 서버 추가(project_ref `mjorszvxiihuvcueyqil`), OAuth 인증 완료. 향후 회원가입/유저 관리/구독 DB 연동 후보.
+
+**왜**: 사용자별 사용 이력/라이선스/구독 상태 추적 기반을 마련하기 위해 로그인 게이트가 필요. 구글 OAuth 는 (1) 민감 스코프를 쓰지 않으면 앱 심사가 불필요하고 (2) Desktop flow 가 사용자에게 친숙한 브라우저 로그인을 제공해 일반 사용자 대상 앱에 적합. 백엔드 데이터는 Supabase 로 갈 가능성이 커서 MCP 를 먼저 붙여둠.
+
+**영향 범위**:
+- 런타임: 앱 실행 시 네트워크(구글 OAuth) 필수 — 오프라인 모드 없음. 첫 실행 때만 브라우저 오픈, 이후엔 refresh token 으로 조용히 자동 로그인.
+- 빌드: `resource/oauth_client.json` 이 번들에 포함되어야 로그인 가능 → 양쪽 `.spec` 의 `datas` 에 추가 필요. 이 파일은 **커밋 금지**(.gitignore 확인).
+- 배포: OAuth 클라이언트의 redirect_uri 는 loopback 이라 공개된 "설치형 앱" 시크릿이므로 앱 바이너리에 동봉해도 되지만, 유출 시 로그인 도용 시도에 악용될 수 있어 퍼블릭 리포엔 넣지 말 것.
+
+**주의**:
+- `run_local_server` 는 중간 취소가 어려워 `timeout_seconds=300` 경과 전엔 스레드가 살아있음 — `WelcomeDialog._stop_worker` 는 `quit()` 만 호출하고 조인하지 않음(UI 블로킹 방지). 창 닫아도 백그라운드에서 타임아웃까지 대기.
+- 스코프 추가 시 구글 앱 심사가 필요해질 수 있음. 현재 스코프 유지 권장.
+- Supabase 연동은 아직 코드 없음 — MCP 만 붙은 상태. 회원가입 구현 시 Google OAuth 의 `sub`(user ID) 를 Supabase `users` 테이블 키로 매핑하는 설계가 자연스러움.
+
+---
+
+## 2026-04-22 — Supabase `public.users` 테이블 + 로그인 시 upsert (A안)
+
+**무엇을**:
+- Supabase 프로젝트(`mjorszvxiihuvcueyqil`) 에 `public.users(sub PK, email, name, created_at, updated_at)` 테이블 생성. `updated_at` 자동 갱신 트리거(`public.set_updated_at`, search_path='' + `pg_catalog.now()` 로 lint 경고 회피).
+- RLS 활성화, 정책 1개: `FOR ALL TO anon USING(true) WITH CHECK(true)` ("anon can upsert users"). anon 에게 `grant select, insert, update on public.users`.
+- `auth/supabase_client.py` 신규 — `requests` 기반 경량 PostgREST upsert. supabase-py 는 일부러 의존성 추가하지 않음(번들 절약).
+- `resource/supabase_config.json` (url + anon_key) 추가, `.gitignore` 및 양쪽 `.spec` `datas` 반영.
+- `main.py` 로그인 직후 `upsert_user(sub, email, name)` 호출. 실패해도 앱은 계속 실행.
+
+**왜**: 사용자(이름·이메일) 기본 정보를 중앙 저장. "회원가입"은 별도 플로우 없이 구글 최초 로그인 = 자동 가입으로 단순화. supabase-py 대신 PostgREST 직접 호출한 이유는 번들 사이즈 + 의존성 최소화 + 이 앱이 gotrue/storage/realtime 등 필요 없기 때문.
+
+**영향 범위**:
+- 런타임: 로그인 성공 후 최대 10초 HTTP POST 1회 추가(비동기 아니고 UI 스레드 — 실패 시 10초 블로킹 가능). 향후 필요 시 `QThread` 로 이관 검토.
+- 빌드: `resource/supabase_config.json` 미배치 시 `upsert_user` 는 조용히 False 반환. 빌드 자체는 성공.
+- DB: `public.users` 테이블·트리거·정책 전부 신규. 기존 데이터 영향 없음.
+
+**주의**:
+- ⚠️ **A안 (anon key + 완전 개방 RLS) 은 임시** — 규모 커지기 전에 B안(Edge Function + Google ID token 검증) 으로 이관 필수. CLAUDE.md 상단 "반드시 해야 할 일" 섹션에 기록됨.
+- PostgREST 의 upsert(`resolution=merge-duplicates`) 는 INSERT/UPDATE 분리 정책 + `USING/WITH CHECK (true)` 조합에서도 42501 로 거부됨(재현 확인). 단일 `FOR ALL` 정책이어야 동작. B안 이관 시엔 이 제약 자체가 사라짐.
+- PostgREST upsert 는 `SELECT` 권한도 필요(충돌 검사용). RLS 로 조회는 여전히 막혀 있으나 `grant select to anon` 은 필수.
+- 트리거 함수 search_path='' 이면 `now()` 가 해석 안 되므로 `pg_catalog.now()` 로 스키마 한정 필요.
+- 새 publishable key(`sb_publishable_...`) 는 `anon` 역할로 매핑되지 않는 것으로 확인됨. 레거시 JWT anon key 를 사용해야 `TO anon` 정책이 매칭됨.
+
+---
+
 <!-- 새 엔트리는 이 위에 추가 (시간 역순) -->
